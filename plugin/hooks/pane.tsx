@@ -719,7 +719,7 @@ export const register: Register = (on, options) => {
             </Button>
           </Box>
         )}
-        {!handToClaudeAuto && s.phase === 'paired' && (
+        {!handToClaudeAuto && phase === 'paired' && (
           <Text dimColor>Messages wait here until you press → Claude (setting: Hand messages to Claude automatically).</Text>
         )}
         {chat.length === 0 && <Text dimColor>No messages yet.</Text>}
