@@ -15,6 +15,15 @@ separately; each early entry names the plugin versions that used that binary.
   above the prompt shows what's new (Open pane, Latest → Claude), and the status line shows who you're paired with.
   In the terminal the header icon is a small pixel pear (a larger one when nothing is paired). (pair-cvl.9)
 - Open on a received file that could run (a script, an app, an installer) shows it in its folder instead.
+- Pair with up to 3 people at once. `pair_start` and `pair_join` now work while already paired. Each pairing has a
+  peer id (`p1`, `p2`, ...), its own trust level and its own connection; the id is in the `pair_start` / `pair_join`
+  result, in brackets after the name on every event line (`pair message from "Ann" [p2]`) and as `peer_id` on every
+  inbox line. `send_to_peer`, `send_file`, `pair_accept`, `pair_reject` and `unpair` take an optional `peer`, needed
+  only when more than one pairing fits (pair refuses to guess); `unpair` also takes `peer: "all"`. `check_messages`
+  lists every open pairing, closing the session says bye to each, and a pane chat line may name its `peer`. The wire
+  protocol is unchanged, so the other side needs no update. The pane lists each pairing and sends to the one you
+  pick; the threat model adds T17-T19 (one peer reaching another through your Claude, wrong recipient, look-alike
+  peers).
 
 ## 0.1.14 (2026-11-14)
 

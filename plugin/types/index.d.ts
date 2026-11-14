@@ -21,14 +21,29 @@ export type PairEvent = {
   delivered?: boolean
   /** When you handed it to Claude, ms. */
   handedAt?: number
+  /**
+   * The pairing this row belongs to: the server's local peer id (p1, p2, ...), from the inbox line's `peer_id`, or the
+   * peer a sent row went to. Absent on rows from a server before multi-peer support. (Added 14-Nov-26, multi-peer.)
+   */
+  peerId?: string
+  /** Sent rows: the short name of the peer it went to, shown when more than one is paired. */
+  to?: string
 }
 
-export type PairStatus = {
-  phase: 'idle' | 'request' | 'paired' | 'reconnecting'
+/** One open pairing, as the pane follows it from inbox events. (Added 14-Nov-26, multi-peer.) */
+export type PairPeer = {
+  /** The server's local peer id (p1, p2, ...); '' for a server before multi-peer support. */
+  id: string
+  phase: 'request' | 'paired' | 'reconnecting'
   /** The peer's identity as the server gives it: user@host · git name · git email. */
   peer?: string
   trust?: string
   via?: string
+}
+
+/** Every open pairing, oldest first (up to 3). Multi-peer changed this from one peer's fields (shape status-3). */
+export type PairStatus = {
+  peers: PairPeer[]
 }
 
 declare module 'claude-code' {
@@ -45,6 +60,8 @@ declare module 'claude-code' {
       tab: 'chat' | 'files'
       /** The pane is placed on a surface (the band above the prompt shows while it isn't). */
       paneOpen: boolean
+      /** The peer id the pane's chat box and file box send to, when more than one is paired; '' = the first. */
+      selected: string
     }
   }
 }

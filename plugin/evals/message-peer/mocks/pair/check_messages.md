@@ -1,1 +1,1 @@
-State: Paired with sam@laptop · Sam Doe · sam@example.com. No new events.
+State: Paired with sam@laptop · Sam Doe · sam@example.com (peer p1). No new events.

@@ -176,6 +176,32 @@ test('pane closed: the band shows what is new; Open pane opens it and the band g
   await band.unmount()
 })
 
+// Multi-peer (added 14-Nov-26): one row per pairing, Accept answers the pending request by its peer id, chat goes to
+// the pairing picked in the header, your rows say who they went to, and an unpaired pairing leaves the list.
+test('three peers: a row each, Accept names the request, chat goes to the picked peer', async ($, on) => {
+  const { w, clock, inbox } = world(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const as = (who: string, id: string) => ({ peer: `u@h · ${who} · x@y`, peer_id: id })
+  inbox(line('paired', 'Ann accepted.', { peer_id: 'p1' }))
+  inbox(line('paired', 'Bo accepted.', as('Bo', 'p2')))
+  inbox(line('pair_request', 'Someone named …', as('Cy', 'p3')))
+  await clock.advance(1000)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /3 of 3 pairings open/ })).toBeDefined()
+  await ui.press({ key: 'accept' })
+  expect(w.calls.at(-1)).toEqual({ tool: 'pair_accept', args: { peer: 'p3' } })
+  await ui.press({ key: 'peer-p2' })
+  await ui.input({ key: 'chat', text: 'hi Bo' })
+  expect(JSON.parse(w.files[`${DIR}/outbox.jsonl`]!.trim())).toMatchObject({ text: 'hi Bo', peer: 'p2' })
+  expect(await ui.find({ type: 'Text', text: /^you → Bo$/ })).toBeDefined()
+
+  inbox(line('unpaired', 'Pairing ended: the other side unpaired', as('Bo', 'p2')))
+  await clock.advance(1000)
+  expect(await ui.find({ type: 'Text', text: /2 of 3/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('pair starts after the pane: it says so, then finds the session; mobile has no input', async ($, on) => {
   const { w, clock, inbox } = world(on)
   w.isUp = false

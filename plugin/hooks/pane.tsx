@@ -5,7 +5,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { PairEvent, PairStatus } from '../types'
+import type { PairEvent, PairPeer, PairStatus } from '../types'
 
 const PANE = 'pair'
 const SERVER = 'plugin:pair:pair'
@@ -14,7 +14,13 @@ const ACCENT = '#4fc9b0'
 const SOON = '#e8b93a'
 
 const events = atom({ plugin: 'pair', key: 'events' } as const, [], { shape: 'events-2' })
-const status = atom({ plugin: 'pair', key: 'status' } as const, { phase: 'idle' }, { shape: 'status-2' })
+// Multi-peer (CHANGED 14-Nov-26): status is now a list of pairings, so the shape tag moves to status-3; a value stored
+// by the single-peer pane (status-2) reads as no pairings until the next inbox event fills it in.
+const status = atom({ plugin: 'pair', key: 'status' } as const, { peers: [] }, { shape: 'status-3' })
+/** Which pairing the chat and file boxes send to, when more than one is open ('' = the first). */
+const selected = atom({ plugin: 'pair', key: 'selected' } as const, '')
+/** The cap the server enforces (MAX_PEERS in server/src/main.rs). */
+const MAX_PEERS = 3
 const seen = atom({ plugin: 'pair', key: 'seen' } as const, 0)
 const dir = atom({ plugin: 'pair', key: 'dir' } as const, '')
 const seenAt = atom({ plugin: 'pair', key: 'seenAt' } as const, 0)
@@ -129,24 +135,43 @@ const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p
 /** A row from the other side the user hasn't seen or handed to Claude yet. */
 const isNew = (m: PairEvent, since: number) => (m.kind === 'message' || m.kind === 'file') && m.at > since && !m.handedAt
 
+/*
+ * nextStatus: fold one inbox event into the list of open pairings.
+ * WHY (multi-peer): the server now runs up to 3 pairings at once and tags each event with the pairing's peer_id, so
+ *   the pane keeps one entry per pairing instead of one set of fields.
+ * HOW: the entry is found by peer id ('' for a server before multi-peer support, which then behaves as one pairing).
+ *   pair_request adds or resets it, peer traffic marks it paired, connection notices mark it reconnecting or back, and
+ *   unpaired removes it. Any event for a pairing the pane hasn't seen yet adds it (the pane can open mid-pairing,
+ *   and a joiner's failed first connection arrives before 'paired').
+ * VALUES: phases as in v0.1.14's single-peer status; the "dropped|Couldn't connect" test is the server's own wording.
+ * INTERACTS WITH: pollOnce (calls it), the server's push_for() (peer_id), types PairPeer.
+ * CHANGED: 14-Nov-26 — per-pairing status for multi-peer support.
+ */
 function nextStatus(s: PairStatus, e: PairEvent & { identity?: string }): PairStatus {
-  const peer = e.identity || s.peer
+  const id = e.peerId ?? ''
+  const old = s.peers.find(p => p.id === id)
+  const peer = e.identity || old?.peer
+  const put = (p: PairPeer) => ({ peers: old ? s.peers.map(x => (x.id === id ? p : x)) : [...s.peers, p] })
   switch (e.kind) {
     case 'pair_request':
-      return { phase: 'request', peer, trust: s.trust }
+      return put({ id, phase: 'request', peer, trust: old?.trust })
     case 'paired':
     case 'message':
     case 'file':
     case 'file_delivered':
-      return { ...s, phase: 'paired', peer, trust: e.trust ?? s.trust, via: e.via ?? s.via }
+      return put({ ...old, id, phase: 'paired', peer, trust: e.trust ?? old?.trust, via: e.via ?? old?.via })
     case 'connection':
-      return { ...s, phase: /dropped|Couldn't connect/.test(e.text) ? 'reconnecting' : 'paired' }
+      // A joiner whose first connection fails hears this before 'paired': it adds the pairing, as reconnecting.
+      return put({ ...old, id, peer, phase: /dropped|Couldn't connect/.test(e.text) ? 'reconnecting' : 'paired' })
     case 'unpaired':
-      return { phase: 'idle' }
+      return { peers: s.peers.filter(p => p.id !== id) }
     default:
       return s
   }
 }
+
+/** The pairing the pane is showing: the selected one while it is open, else the oldest. (Multi-peer, 14-Nov-26.) */
+const shown = (s: PairStatus, sel: string): PairPeer | undefined => s.peers.find(p => p.id === sel) ?? s.peers[0]
 
 /**
  * pair's folder for this session, `<config>/plugins/data/<data dir>/sessions/<session id>`, or '' until the server
@@ -174,12 +199,16 @@ async function addRows($: EngineInterface, rows: PairEvent[]) {
   await update($, events, list => [...list, ...rows].slice(-200))
 }
 
-/** "pair: Alex Kim (2 new)" in the status line while paired (Claude Code adds the "pair:"); nothing otherwise. */
+/**
+ * "pair: Alex Kim (2 new)" in the status line while paired (Claude Code adds the "pair:"); nothing otherwise.
+ * Multi-peer (CHANGED 14-Nov-26): every open pairing's name, comma-separated.
+ */
 async function refreshStatus($: EngineInterface) {
   const [s, list, since] = await Promise.all([read($, status), read($, events), read($, seenAt)])
-  if (s.phase === 'idle' || !s.peer) return void $.ui.status(undefined)
+  const names = s.peers.flatMap(p => (p.peer ? [shortPeer(p.peer)] : []))
+  if (names.length === 0) return void $.ui.status(undefined)
   const n = list.filter(m => isNew(m, since)).length
-  $.ui.status(`${shortPeer(s.peer)}${n ? ` (${n} new)` : ''}`)
+  $.ui.status(`${names.join(', ')}${n ? ` (${n} new)` : ''}`)
 }
 
 async function markSeen($: EngineInterface) {
@@ -229,14 +258,16 @@ async function pollOnce($: EngineInterface) {
   if (from === lines.length) return
   const now = await $.clock.now()
   const fresh: (PairEvent & { identity?: string })[] = []
-  const delivered: string[] = []
+  const delivered: { name: string; peerId?: string }[] = []
   lines.slice(from).forEach((line, i) => {
     try {
       const ev = JSON.parse(line)
       const m = ev.meta ?? {}
       if (m.kind === 'probe') return
       const content = String(ev.content ?? '')
-      if (m.kind === 'file_delivered') delivered.push(content.match(/received "(.+)"\.$/)?.[1] ?? '')
+      if (m.kind === 'file_delivered') {
+        delivered.push({ name: content.match(/received "(.+)"\.$/)?.[1] ?? '', peerId: m.peer_id })
+      }
       fresh.push({
         id: `in-${from + i}`,
         kind: String(m.kind ?? 'event'),
@@ -249,6 +280,8 @@ async function pollOnce($: EngineInterface) {
         name: m.name,
         size: typeof m.size === 'number' ? m.size : undefined,
         path: m.path,
+        // Multi-peer (14-Nov-26): only our server's own id shape; anything else is treated as no id.
+        peerId: typeof m.peer_id === 'string' && /^p\d{1,10}$/.test(m.peer_id) ? m.peer_id : undefined,
       })
     } catch {}
   })
@@ -257,8 +290,10 @@ async function pollOnce($: EngineInterface) {
   await update($, events, list => {
     // A delivery confirms the oldest unconfirmed sent file of that name; it gets no row of its own.
     const out = [...list]
-    for (const name of delivered) {
-      const f = out.find(m => m.kind === 'sent-file' && m.name === name && !m.delivered)
+    // Multi-peer (14-Nov-26): the same file sent to two peers is confirmed per peer.
+    for (const { name, peerId } of delivered) {
+      const samePeer = (m: PairEvent) => !peerId || !m.peerId || m.peerId === peerId
+      const f = out.find(m => m.kind === 'sent-file' && m.name === name && !m.delivered && samePeer(m))
       if (f) out[out.indexOf(f)] = { ...f, delivered: true }
     }
     const rows = fresh.filter(m => m.kind !== 'file_delivered').map(({ identity: _, ...m }) => m)
@@ -299,6 +334,18 @@ async function handToClaude($: EngineInterface, m: PairEvent) {
   await markSeen($)
 }
 
+/** A pair tool call's `peer` argument (a peer id, or "all" for unpair), normalised; '' when left out. (14-Nov-26) */
+function argPeer(e: unknown): string {
+  return String((e as { peer?: unknown }).peer ?? '').trim().toLowerCase()
+}
+
+/** The pairing a send went to (by id, or the only paired one), for "you → Ann" rows when several are paired. */
+async function sentTo($: EngineInterface, id: string): Promise<{ peerId?: string; to?: string }> {
+  const s = await read($, status)
+  const p = id ? s.peers.find(x => x.id === id) : s.peers.find(x => x.phase === 'paired')
+  return { peerId: p?.id || undefined, to: p?.peer ? shortPeer(p.peer) : undefined }
+}
+
 const firstText = (r: { content: { type: string; text?: string }[] }) =>
   r.content.find(c => c.type === 'text')?.text ?? ''
 
@@ -311,7 +358,8 @@ export const register: Register = on => {
       await update($, dir, () => '')
       await update($, seen, () => 0)
       await update($, events, () => [])
-      await update($, status, (): PairStatus => ({ phase: 'idle' }))
+      await update($, status, (): PairStatus => ({ peers: [] }))
+      await update($, selected, () => '')
       await update($, seenAt, () => 0)
       await update($, paneOpen, () => false)
     }
@@ -337,21 +385,37 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e)) // only watches: never stand in the way of a close
 
   // Claude's own pair calls, so the pane shows them too. They only watch: a failure replays the call's own result.
+  // Multi-peer (CHANGED 14-Nov-26): each call's `peer` argument (a peer id, or "all" for unpair) says which pairing it
+  // touched; without one the server acted on the only pairing that fitted, which the pane finds the same way.
   on('tool.call', { tool: 'mcp__plugin_pair_pair__pair_accept' }, async ($, e, next) => {
     const r = await next(e)
-    if (!r.deny && !r.isError) await update($, status, (s): PairStatus => ({ ...s, phase: 'paired' }))
+    if (!r.deny && !r.isError) {
+      const id = argPeer(e)
+      await update($, status, (s): PairStatus => {
+        const target = s.peers.find(p => (id ? p.id === id : p.phase === 'request'))
+        return { peers: s.peers.map(p => (p === target ? { ...p, phase: 'paired' } : p)) }
+      })
+    }
     return r
   }).catch(($, e, next) => next(e))
   on('tool.call', { tool: 'mcp__plugin_pair_pair__unpair' }, async ($, e, next) => {
     const r = await next(e)
-    if (!r.deny && !r.isError) await update($, status, (): PairStatus => ({ phase: 'idle' }))
+    if (!r.deny && !r.isError) {
+      const id = argPeer(e)
+      await update($, status, (s): PairStatus => ({
+        peers: !id || id === 'all' ? [] : s.peers.filter(p => p.id !== id),
+      }))
+    }
     return r
   }).catch(($, e, next) => next(e))
   on('tool.call', { tool: 'mcp__plugin_pair_pair__send_to_peer' }, async ($, e, next) => {
     const r = await next(e)
     const text = String((e as { text?: unknown }).text ?? '')
     if (!r.deny && !r.isError && text) {
-      await addRows($, [{ id: `claude-${e.tool_use_id}`, kind: 'claude', peer: '', text, at: await $.clock.now() }])
+      await addRows($, [
+        { id: `claude-${e.tool_use_id}`, kind: 'claude', peer: '', text, at: await $.clock.now(),
+          ...(await sentTo($, argPeer(e))) },
+      ])
     }
     return r
   }).catch(($, e, next) => next(e))
@@ -362,7 +426,7 @@ export const register: Register = on => {
       const size = await $.fs.stat(path).then(s => s.size, () => undefined)
       await addRows($, [
         { id: `file-${e.tool_use_id}`, kind: 'sent-file', peer: '', text: '', name: baseName(path), size, path,
-          at: await $.clock.now() },
+          at: await $.clock.now(), ...(await sentTo($, argPeer(e))) },
       ])
     }
     return r
@@ -372,13 +436,19 @@ export const register: Register = on => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button, Link } = ui
     const Input = 'Input' in ui ? ui.Input : undefined // mobile has none: read-only there
-    const [s, list, d, since, current] = await Promise.all([
-      read($, status), read($, events), read($, dir), read($, seenAt), read($, tab),
+    const [s, list, d, since, current, sel] = await Promise.all([
+      read($, status), read($, events), read($, dir), read($, seenAt), read($, tab), read($, selected),
     ])
-    const peer = s.peer ? shortPeer(s.peer) : 'your colleague'
-    const host = s.peer?.split(' · ')[0] ?? ''
+    // Multi-peer (CHANGED 14-Nov-26): `cur` is the pairing the pane shows and the boxes send to; `many` switches on
+    // the per-peer parts (peer list, "you → Ann", peer ids on calls). With one pairing the pane draws as before.
+    const cur = shown(s, sel)
+    const many = s.peers.length > 1
+    const phase = cur?.phase ?? 'idle'
+    const peer = cur?.peer ? shortPeer(cur.peer) : 'your colleague'
     const desk = e.surface !== 'terminal'
     const say = (t: string) => void $.ui.toast(t)
+    /** `{ peer: id }` for a tool call when several pairings are open; nothing with one (the server needs none). */
+    const peerArg = (p?: PairPeer) => (many && p?.id ? { peer: p.id } : {})
 
     const icon = (() => {
       if (e.surface === 'terminal') {
@@ -405,23 +475,35 @@ export const register: Register = on => {
       return null
     })()
 
-    const dot =
-      s.phase === 'paired' ? <Text color={ACCENT}>●</Text>
-      : s.phase === 'idle' ? <Text dimColor>●</Text>
-      : <Text color={SOON}>●</Text>
-    const peerLine =
-      s.phase === 'idle' ? (
-        <Text dimColor>Not paired</Text>
-      ) : (
+    /** One pairing's line: dot, name, machine, trust, state; with several, the shown one is marked and others pick. */
+    const peerRow = (p: PairPeer) => {
+      const dot =
+        p.phase === 'paired' ? <Text color={ACCENT}>●</Text> : <Text color={SOON}>●</Text>
+      const name = p.peer ? shortPeer(p.peer) : 'your colleague'
+      const host = p.peer?.split(' · ')[0] ?? ''
+      const line = (
         <Text>
-          {dot} <Text bold>{peer}</Text>
+          {dot} <Text bold={!many || p === cur}>{name}</Text>
           {host && <Text dimColor> · {host}</Text>}
           <Text dimColor> · trust: </Text>
-          {s.trust ?? 'read-only'}
-          {s.phase === 'reconnecting' && <Text color={SOON}> · reconnecting</Text>}
-          {s.via && s.phase === 'paired' && <Text dimColor> · {s.via}</Text>}
+          {p.trust ?? 'read-only'}
+          {p.phase === 'request' && many && <Text color={SOON}> · wants to pair</Text>}
+          {p.phase === 'reconnecting' && <Text color={SOON}> · reconnecting</Text>}
+          {p.via && p.phase === 'paired' && <Text dimColor> · {p.via}</Text>}
+          {many && p.id && <Text dimColor> · {p.id}</Text>}
+          {many && p === cur && <Text color={ACCENT}> ◂</Text>}
         </Text>
       )
+      if (!many || p === cur) return line
+      return (
+        <Button key={`peer-${p.id}`} plain onPress={() => update($, selected, () => p.id)}>
+          {line}
+        </Button>
+      )
+    }
+    const peerLine =
+      s.peers.length === 0 ? <Text dimColor>Not paired</Text> : <Box flexDirection="column">{s.peers.map(peerRow)}</Box>
+    const roomLeft = MAX_PEERS - s.peers.length
     const header = (
       <Box flexDirection="row" gap={1}>
         {icon}
@@ -434,9 +516,16 @@ export const register: Register = on => {
             <Link href={SITE}>blackbeard.tech</Link>
           </Text>
           {peerLine}
-          <Text>
-            <Text dimColor>+ Pair another</Text> <Text color={SOON}>{desk ? 'soon' : 'coming soon'}</Text>
-          </Text>
+          {s.peers.length > 0 &&
+            (roomLeft > 0 ? (
+              <Text dimColor>
+                + Pair another: /pair:pair ({s.peers.length} of {MAX_PEERS})
+              </Text>
+            ) : (
+              <Text dimColor>
+                {MAX_PEERS} of {MAX_PEERS} pairings open
+              </Text>
+            ))}
         </Box>
       </Box>
     )
@@ -445,14 +534,21 @@ export const register: Register = on => {
       await update($, tab, () => t)
       await markSeen($)
     }
+    // Multi-peer (CHANGED 14-Nov-26): Accept / Decline answer the request being shown (or the oldest request), and
+    // the chat and file boxes send to the shown pairing, naming its peer id when several are open.
+    const request = cur?.phase === 'request' ? cur : s.peers.find(p => p.phase === 'request')
     const accept = async () => {
-      const r = await $.mcp.call(SERVER, 'pair_accept')
-      if (!r.isError) await update($, status, (x): PairStatus => ({ ...x, phase: 'paired' }))
+      const r = await $.mcp.call(SERVER, 'pair_accept', peerArg(request))
+      if (!r.isError) {
+        await update($, status, (x): PairStatus => ({
+          peers: x.peers.map(p => (p.id === request?.id ? { ...p, phase: 'paired' } : p)),
+        }))
+      }
       say(firstText(r) || 'Done.')
     }
     const decline = async () => {
       try {
-        say(firstText(await $.mcp.call(SERVER, 'pair_reject')) || 'Declined.')
+        say(firstText(await $.mcp.call(SERVER, 'pair_reject', peerArg(request))) || 'Declined.')
       } catch {
         say('Couldn’t decline from the pane here: ask Claude to decline.')
       }
@@ -464,28 +560,34 @@ export const register: Register = on => {
       const path = `${d}/outbox.jsonl`
       // ponytail: read-modify-write, no append in $.fs; the server skips ids it has sent, so a rewrite never resends
       const old = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-      await $.fs.write(path, `${old}${JSON.stringify({ id, text })}\n`)
-      await addRows($, [{ id: `out-${id}`, kind: 'sent', peer: '', text, at: await $.clock.now() }])
+      // The line names its pairing (a server before multi-peer support ignores the field).
+      const line = cur?.id ? { id, text, peer: cur.id } : { id, text }
+      await $.fs.write(path, `${old}${JSON.stringify(line)}\n`)
+      await addRows($, [
+        { id: `out-${id}`, kind: 'sent', peer: '', text, at: await $.clock.now(), peerId: cur?.id || undefined,
+          to: cur?.peer ? shortPeer(cur.peer) : undefined },
+      ])
       await markSeen($)
     }
     const sendFile = async (value: string) => {
       let path = value.trim()
       if (!path) return
       if (path.startsWith('~')) path = `${(await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''}${path.slice(1)}`
-      const r = await $.mcp.call(SERVER, 'send_file', { path })
+      const r = await $.mcp.call(SERVER, 'send_file', { path, ...peerArg(cur) })
       say(firstText(r) || 'Sent.')
       if (!r.isError) {
         const size = await $.fs.stat(path).then(x => x.size, () => undefined)
         await addRows($, [
           { id: `file-${Date.now().toString(36)}`, kind: 'sent-file', peer: '', text: '', name: baseName(path), size,
-            path, at: await $.clock.now() },
+            path, at: await $.clock.now(), peerId: cur?.id || undefined,
+            to: cur?.peer ? shortPeer(cur.peer) : undefined },
         ])
       }
       await markSeen($)
     }
 
     // The empty pane: the big pear and how to start.
-    if (s.phase === 'idle' && list.length === 0) {
+    if (s.peers.length === 0 && list.length === 0) {
       const big =
         e.surface === 'terminal' ? (() => {
           const { Raster } = $.ui.resolve(e)
@@ -533,8 +635,10 @@ export const register: Register = on => {
       </Box>
     )
 
+    // Multi-peer (CHANGED 14-Nov-26): with several pairings, your side's rows say who they went to.
+    const to = (m: PairEvent) => (many && m.to ? ` → ${m.to}` : '')
     const who = (m: PairEvent) =>
-      m.kind === 'sent' ? 'you' : m.kind === 'claude' ? 'your Claude' : m.peer || 'pair'
+      m.kind === 'sent' ? `you${to(m)}` : m.kind === 'claude' ? `your Claude${to(m)}` : m.peer || 'pair'
     const row = (m: PairEvent) => {
       const fresh = isNew(m, since)
       const fromPeer = m.kind === 'message' || m.kind === 'file'
@@ -592,10 +696,10 @@ export const register: Register = on => {
 
     const chatTab = (
       <Box flexDirection="column" gap={1}>
-        {s.phase === 'request' && (
+        {request && (
           <Box flexDirection="row" gap={1}>
             <Button key="accept" variant="primary" onPress={accept}>
-              Accept
+              {many && request.peer ? `Accept ${shortPeer(request.peer)}` : 'Accept'}
             </Button>
             <Button key="decline" onPress={decline}>
               Decline
@@ -604,9 +708,9 @@ export const register: Register = on => {
         )}
         {chat.length === 0 && <Text dimColor>No messages yet.</Text>}
         {chat.slice(-room).map(row)}
-        {Input && s.phase !== 'idle' && s.phase !== 'request' && d && (
+        {Input && (phase === 'paired' || phase === 'reconnecting') && d && (
           <Box flexDirection="column">
-            <Text dimColor>Message {peer} (sent as you, not via Claude)</Text>
+            <Text dimColor>Message {peer} (sent as you, not via Claude){many ? ' · pick another peer above' : ''}</Text>
             <Input key="chat" placeholder="Type and press Enter" submitLabel="send" onSubmit={sendChat} />
           </Box>
         )}
@@ -617,12 +721,12 @@ export const register: Register = on => {
     const filesTab = (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
-          <Text bold>Received from {peer}</Text>
+          <Text bold>{many ? 'Received' : `Received from ${peer}`}</Text>
           {received.length === 0 && <Text dimColor>Nothing yet.</Text>}
           {received.slice(-8).map(f => (
             <Box flexDirection="row" gap={1}>
               <Text>
-                ▤ {f.name} <Text dimColor>{bytes(f.size)} · {time(f.at)}</Text>
+                ▤ {f.name} <Text dimColor>{many ? `from ${f.peer} · ` : ''}{bytes(f.size)} · {time(f.at)}</Text>
               </Text>
               {f.path && !desk && (
                 <Button key={`open-${f.id}`} onPress={() => show($, f.path!, false)}>
@@ -640,7 +744,7 @@ export const register: Register = on => {
             </Box>
           ))}
         </Box>
-        {Input && s.phase === 'paired' && (
+        {Input && phase === 'paired' && (
           <Box flexDirection="column">
             <Text bold>Send a file to {peer}</Text>
             <Text dimColor>Type its path</Text>
@@ -685,7 +789,7 @@ export const register: Register = on => {
       read($, status), read($, events), read($, seenAt), read($, paneOpen),
     ])
     const fresh = list.filter(m => isNew(m, since))
-    if (e.props.hasSurvey || open || s.phase === 'idle' || fresh.length === 0) return next(e)
+    if (e.props.hasSurvey || open || s.peers.length === 0 || fresh.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const lastMsg = [...fresh].reverse().find(m => m.kind === 'message')
     const lastFile = [...fresh].reverse().find(m => m.kind === 'file')
@@ -696,7 +800,7 @@ export const register: Register = on => {
         <Text bold color={ACCENT}>
           pair
         </Text>
-        <Text bold>{s.peer ? shortPeer(s.peer) : ''}</Text>
+        <Text bold>{latest.peer || (s.peers[0]?.peer ? shortPeer(s.peers[0].peer) : '')}</Text>
         <Text color={SOON}>{fresh.length} new</Text>
         {lastMsg && <Text dimColor>· “{clip(lastMsg.text)}”</Text>}
         {lastFile && <Text dimColor>· sent you {lastFile.name}</Text>}

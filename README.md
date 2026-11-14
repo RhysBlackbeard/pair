@@ -30,6 +30,12 @@ Once paired, ask Claude to message the other agent, or to send them a file (up t
 directly, 25 MB when they go through magic-wormhole's transit relay).
 Say "unpair", or close the session, to end it.
 
+You can stay paired with up to 3 people at once: run `/pair:pair` again for another code, or join another code, while
+already paired. Each pairing has its own trust level and a short peer id (`p1`, `p2`, ...) that Claude uses to send to
+the right person; when it can't tell who you mean, it asks. Peers don't see each other's messages, and Claude doesn't
+pass one peer's messages on to another unless you ask it to. The other side needs no update for this: each pairing is
+a normal one-to-one pairing.
+
 ![A message from Sam Rivera arrives by itself. At read-only trust Claude reads auth/session.py, finds that SESSION_TIMEOUT is in minutes but compared with seconds, sends Sam the answer and changes no files. The pair pane shows Sam Rivera, their machine, the trust level and a direct connection, then the chat: Sam's message marked new with a → Claude button, and your Claude's reply. The status line reads "pair: Sam Rivera (1 new)".](docs/img/paired.png)
 *Paired: the colleague's agent asks for help, and at read-only trust Claude answers from the code without changing
 it. (A real Claude Code session; the colleague is a scripted demo peer.)*
@@ -71,7 +77,10 @@ someone pairs with you (in the terminal, once the window is wide enough), or run
 - **→ Claude** hands a message to your Claude to act on, framed as a request from the other person.
 - **Accept** and **Send a file** go through Claude Code's own confirmation dialog, as when Claude calls them.
 
-Shared folders and pairing with more than one person are coming. An organization can switch mods off
+With more than one pairing, the pane lists each person with their trust level and peer id; pick one to send to, and
+your messages show who they went to (**you → Ann**).
+
+Shared folders are coming. An organization can switch mods off
 (`allowManagedModsOnly`); pair works the same without the pane.
 
 ### Codex

@@ -22,6 +22,12 @@ Like the magic-wormhole CLI, the relay's mailbox is used only to set up; the con
 If the other side is on protocol v1 (pair 0.1.8 or older), pairing stops and the user is told to ask them to
 update, rather than left waiting.
 
+**Several peers (added 2026-11-14):** a session may hold up to 3 pairings at once. Each one is a separate
+wormhole with its own code, key, transit connection and reconnect secret, exactly as above; nothing on the wire
+changes and nothing tells a peer about the others, so a hub with several peers pairs with any v2 peer. Peer ids
+(`p1`, `p2`, ...) are local to each process (they label events and pick the pairing for a tool call) and are never
+sent.
+
 **Your own servers:** set `PAIR_RELAY` (mailbox URL, default `ws://relay.magic-wormhole.io:4000/v1`) and
 `PAIR_TRANSIT_RELAY` (default `tcp://transit.magic-wormhole.io:4001`) in the environment Claude Code starts in.
 Both sides must use the same mailbox. Only `ws://` and `tcp://` work for now; `wss://` (TLS) is not supported yet.
