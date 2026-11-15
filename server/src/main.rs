@@ -1045,8 +1045,10 @@ fn check_messages() -> Value {
     for e in &events {
         let m = &e["meta"];
         let id = m["peer_id"].as_str().map(|i| format!(" [{i}]")).unwrap_or_default();
+        // CHANGED 15-Nov-26: an event with no peer name yet (an expired code, unpairing a code nobody entered) still
+        // shows its peer id, "[unpaired] [p2]:", so the user can tell which pairing ended. Found in the live hub test.
         let from = match m["peer"].as_str().unwrap_or("") {
-            "" => String::new(), // e.g. an expired code: no peer yet
+            "" => id,
             p => format!(" from {p}{id}"),
         };
         text.push_str(&format!(
@@ -2345,6 +2347,20 @@ mod tests {
         // Anything not shaped like our own ids is dropped, never printed.
         let e = json!({"meta": {"kind": "message", "peer": "Ann", "peer_id": "p1] [p9"}, "content": "x"});
         assert_eq!(watch_line(&e), r#"pair message from "Ann": "x""#);
+    }
+
+    // CHANGED 15-Nov-26: found in the live hub test, check_messages printed "[unpaired]:" for an expired code, so the
+    // user could not tell which pairing ended. The header must carry the peer id even when there is no peer name.
+    #[test]
+    fn check_messages_names_pairing_without_peer() {
+        INBOX.lock().unwrap().extend([
+            json!({"meta": {"kind": "unpaired", "peer": "", "peer_id": "p2"}, "content": "Pairing ended: expired"}),
+            json!({"meta": {"kind": "message", "peer": "Ann", "peer_id": "p1"}, "content": "hi"}),
+        ]);
+        let r = check_messages();
+        let text = r["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\n\n[unpaired] [p2]:\nPairing ended: expired"), "{text}");
+        assert!(text.contains("\n\n[message] from Ann [p1]:\nhi"), "{text}");
     }
 
     fn fake_pairing(id: &str, phase: Phase, initiator: bool, peer: &str) -> St {
