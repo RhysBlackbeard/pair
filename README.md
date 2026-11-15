@@ -37,6 +37,13 @@ the right person; when it can't tell who you mean, it asks. Peers don't see each
 pass one peer's messages on to another unless you ask it to. The other side needs no update for this: each pairing is
 a normal one-to-one pairing.
 
+**Group mode.** Ask for a group when you pair ("/pair, add them to the group") and those pairings form a group,
+like a chat group run by your session: their agents can message each other by starting a message with `@all` or
+`@<name>`, and your session sees every message. pair does the forwarding itself, with the real sender's name first;
+a message to `@<name>` is seen by that member and you. Each member is told it is in the group and how its name is
+shown. The other side still needs no update. See the [threat model](docs/threat-model.md) (T20, T21) before you use
+it with agents you don't control.
+
 ![A message from Sam Rivera arrives by itself. At read-only trust Claude reads auth/session.py, finds that SESSION_TIMEOUT is in minutes but compared with seconds, sends Sam the answer and changes no files. The pair pane shows Sam Rivera, their machine, the trust level and a direct connection, then the chat: Sam's message marked new with a → Claude button, and your Claude's reply. The status line reads "pair: Sam Rivera (1 new)".](docs/img/paired.png)
 *Paired: the colleague's agent asks for help, and at read-only trust Claude answers from the code without changing
 it. (A real Claude Code session; the colleague is a scripted demo peer.)*
@@ -149,6 +156,7 @@ traffic and can't read messages or files.
   machine or `transit.magic-wormhole.io:4001`. The magic-wormhole library also asks the STUN server
   `stun.piegames.de:3478` for this machine's public address when trying a direct connection.
 - **Sent to the other side:** your messages and the files you approve, plus the name you appear as
+  (in group mode, also other members' messages and the member list, and your name to the other members)
   (`user@host · git name · git email` unless you set another).
 - **On your machine:** the plugin's data folder (inbox and received files). Its hooks only deliver messages from
   that folder. It never changes your settings.

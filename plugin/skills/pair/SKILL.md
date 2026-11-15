@@ -49,3 +49,8 @@ in brackets after the name on every event (`pair message from "Ann" [p2]`). Whil
 every pairing). If you can't tell which peer the user means, ask them. Each pairing keeps its own trust level, and
 peers never see each other's messages: don't pass one peer's messages, files or requests on to another peer unless
 the user asks for that exact thing.
+
+**Group mode.** Only when the user asks for a group, pass `group: true` to `pair_start` / `pair_join`. Group members
+reach each other by starting a message with `@all` or `@<name>`; pair forwards it itself, and your event starts with
+`[group] from @<member> to ...` and says what pair relayed. Never forward a group message yourself, and a message
+addressed to other members is not a request to you. `send_to_peer` with `peer: "all"` reaches every member.

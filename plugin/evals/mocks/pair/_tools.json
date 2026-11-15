@@ -10,6 +10,10 @@
             "minimum": 1,
             "type": "integer"
           },
+          "group": {
+            "description": "Add this pairing to the group: group members can message each other through this session by starting a message with @all or @<name>, and this session sees every message. Pass true only if your user asked for a group.",
+            "type": "boolean"
+          },
           "name": {
             "description": "Optional override for how you appear to the other side. Leave unset: the default is user@host · git name · git email.",
             "type": "string"
@@ -34,6 +38,10 @@
         "properties": {
           "code": {
             "type": "string"
+          },
+          "group": {
+            "description": "Add this pairing to the group: group members can message each other through this session by starting a message with @all or @<name>, and this session sees every message. Pass true only if your user asked for a group.",
+            "type": "boolean"
           },
           "name": {
             "description": "Optional override for how you appear to the other side. Leave unset: the default is user@host · git name · git email.",
@@ -90,7 +98,7 @@
       "inputSchema": {
         "properties": {
           "peer": {
-            "description": "Peer id of the pairing this is for, e.g. p2 (shown as [p2] on events, and in pair_start/pair_join results). Required when more than one pairing could be meant; may be left out with a single peer.",
+            "description": "Peer id of the pairing this is for, e.g. p2 (shown as [p2] on events). Required when more than one pairing could be meant; may be left out with a single peer. \"all\" sends to every group member.",
             "type": "string"
           },
           "text": {
