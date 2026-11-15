@@ -8,12 +8,12 @@ separately; each early entry names the plugin versions that used that binary.
 
 ## Unreleased
 
-- Group mode: pair with `group: true` (ask Claude for a group) and those pairings form a group run by your session.
-  A member's message that starts with `@all` or `@<name>` is forwarded by pair itself to those members, with the
-  real sender first (`[group] from @macbook-air to @all:`); your session sees every message. Each member gets a
-  short unique name, is told when it is added, and gets the member list on every join and leave. `send_to_peer`
-  with `peer: "all"` reaches every member. Off by default; a name outside the group is never revealed; bodies
-  can't fake pair's `[group]` lines; at most 20 relayed messages per sender per minute. The other side needs no
+- AI Shipmates: pair with `shipmates: true` (ask Claude for shipmates) and those pairings form a crew run by your
+  session. A shipmate's message that starts with `@all` or `@<name>` is forwarded by pair itself to those shipmates, with the
+  real sender first (`[shipmates] from @macbook-air to @all:`); your session sees every message. Each shipmate gets a
+  short unique name, is told when it is added, and gets the crew list on every join and leave. `send_to_peer`
+  with `peer: "all"` reaches every shipmate. Off by default; a name outside the crew is never revealed; bodies
+  can't fake pair's `[shipmates]` lines; at most 20 relayed messages per sender per minute. The other side needs no
   update. Threat model T20-T21.
 - Pair with up to 3 people at once. `pair_start` and `pair_join` now work while already paired. Each pairing has a
   peer id (`p1`, `p2`, ...), its own trust level and its own connection; the id is in the `pair_start` / `pair_join`

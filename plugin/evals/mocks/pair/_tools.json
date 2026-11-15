@@ -10,13 +10,13 @@
             "minimum": 1,
             "type": "integer"
           },
-          "group": {
-            "description": "Add this pairing to the group: group members can message each other through this session by starting a message with @all or @<name>, and this session sees every message. Pass true only if your user asked for a group.",
-            "type": "boolean"
-          },
           "name": {
             "description": "Optional override for how you appear to the other side. Leave unset: the default is user@host · git name · git email.",
             "type": "string"
+          },
+          "shipmates": {
+            "description": "Add this pairing to the AI Shipmates crew: shipmates can message each other through this session by starting a message with @all or @<name>, and this session sees every message. Pass true only if your user asked for shipmates or a group.",
+            "type": "boolean"
           },
           "trust": {
             "description": "What the peer's requests may make you do without asking your user. Pass it only if your user named one; left unset, their Default trust level setting applies (read-only unless they changed it).",
@@ -39,13 +39,13 @@
           "code": {
             "type": "string"
           },
-          "group": {
-            "description": "Add this pairing to the group: group members can message each other through this session by starting a message with @all or @<name>, and this session sees every message. Pass true only if your user asked for a group.",
-            "type": "boolean"
-          },
           "name": {
             "description": "Optional override for how you appear to the other side. Leave unset: the default is user@host · git name · git email.",
             "type": "string"
+          },
+          "shipmates": {
+            "description": "Add this pairing to the AI Shipmates crew: shipmates can message each other through this session by starting a message with @all or @<name>, and this session sees every message. Pass true only if your user asked for shipmates or a group.",
+            "type": "boolean"
           },
           "trust": {
             "description": "What the peer's requests may make you do without asking your user. Pass it only if your user named one; left unset, their Default trust level setting applies (read-only unless they changed it).",
@@ -98,7 +98,7 @@
       "inputSchema": {
         "properties": {
           "peer": {
-            "description": "Peer id of the pairing this is for, e.g. p2 (shown as [p2] on events). Required when more than one pairing could be meant; may be left out with a single peer. \"all\" sends to every group member.",
+            "description": "Peer id of the pairing this is for, e.g. p2 (shown as [p2] on events). Required when more than one pairing could be meant; may be left out with a single peer. \"all\" sends to every shipmate.",
             "type": "string"
           },
           "text": {
