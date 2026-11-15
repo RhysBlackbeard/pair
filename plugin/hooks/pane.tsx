@@ -5,13 +5,39 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { PairEvent, PairPeer, PairStatus } from '../types'
+import type { PairBoard, PairCrew, PairEvent, PairNeed, PairPeer, PairStatus } from '../types'
 
 const PANE = 'pair'
 const SERVER = 'plugin:pair:pair'
 const SITE = 'https://blackbeard.tech'
-const ACCENT = '#4fc9b0'
-const SOON = '#e8b93a'
+/*
+ * Colours (CHANGED 15-Nov-26, AI Shipmates pane): the BB-Tech palette, silver on black (Marketing\Branding\
+ * guidelines.md), not a messaging app's. ACCENT is BB-Tech primary silver; NAMES are muted, desaturated tones for
+ * the hub-assigned palette slots (0 = the hub, 1-7 members), matching the approved mock-up (BRIEF.md v11); NEED is a
+ * muted amber for "Needs you", KNOW a steel blue for "You should know". Text colours only, never a filled
+ * background, so they read on light and dark terminals alike.
+ */
+const ACCENT = '#b0b0b0'
+const SOON = '#c9a227'
+const NEED = '#c9a227'
+const KNOW = '#8fa7c0'
+const TYPED = '#d0d0d0'
+const NAMES = ['#b0b0b0', '#8fa7c0', '#c0a88f', '#a99bc4', '#9db5ae', '#c4a0a0', '#a0b5c9', '#c4b98f']
+/** Logos per model family: a glyph and colour in the terminal, a small drawing elsewhere (trademark: BRIEF.md flag). */
+const AGENT_GLYPH: Record<string, { ch: string; color: string }> = {
+  claude: { ch: '✻', color: '#d97757' },
+  codex: { ch: '❀', color: '#e0e0e0' },
+  gemini: { ch: '✦', color: '#9b72f2' },
+  grok: { ch: '◆', color: '#e0e0e0' },
+}
+const claudeSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="#D97757" transform="translate(12 12)">${Array.from({ length: 12 }, (_, i) => `<rect x="-1.15" y="-11" width="2.3" height="${i % 2 ? 8 : 10}" rx="1.1" transform="rotate(${i * 30})"/>`).join('')}<circle r="2.6"/></g></svg>`
+const codexSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#b0b0b0" stroke-width="1.7" transform="translate(12 12)">${Array.from({ length: 6 }, (_, i) => `<rect x="-3.2" y="-9.6" width="6.4" height="10" rx="3.2" transform="rotate(${i * 60})"/>`).join('')}</g></svg>`
+const AGENT_SVG: Record<string, string> = {
+  claude: claudeSvg,
+  codex: codexSvg,
+  gemini: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><defs><linearGradient id="gm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4E8CF7"/><stop offset=".55" stop-color="#9B72F2"/><stop offset="1" stop-color="#D96570"/></linearGradient></defs><path d="M12 1.5C12.8 7.3 16.7 11.2 22.5 12 16.7 12.8 12.8 16.7 12 22.5 11.2 16.7 7.3 12.8 1.5 12 7.3 11.2 11.2 7.3 12 1.5z" fill="url(#gm)"/></svg>`,
+  grok: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 21V11a7 7 0 0 1 14 0v10l-2.4-1.8L14.3 21 12 19.2 9.7 21l-2.3-1.8z" fill="#b0b0b0"/></svg>`,
+}
 
 const events = atom({ plugin: 'pair', key: 'events' } as const, [], { shape: 'events-2' })
 // Multi-peer (CHANGED 14-Nov-26): status is now a list of pairings, so the shape tag moves to status-3; a value stored
@@ -26,6 +52,12 @@ const dir = atom({ plugin: 'pair', key: 'dir' } as const, '')
 const seenAt = atom({ plugin: 'pair', key: 'seenAt' } as const, 0)
 const tab = atom({ plugin: 'pair', key: 'tab' } as const, 'chat')
 const paneOpen = atom({ plugin: 'pair', key: 'paneOpen' } as const, false)
+// AI Shipmates pane (added 15-Nov-26): the hub's crew list and board, this pane's own answers, open rows, the view.
+const crew = atom({ plugin: 'pair', key: 'crew' } as const, null as PairCrew | null, { shape: 'crew-1' })
+const board = atom({ plugin: 'pair', key: 'board' } as const, null as PairBoard | null, { shape: 'board-1' })
+const answered = atom({ plugin: 'pair', key: 'answered' } as const, {} as Record<string, string>)
+const expanded = atom({ plugin: 'pair', key: 'expanded' } as const, [] as string[])
+const view = atom({ plugin: 'pair', key: 'view' } as const, 'chat' as 'chat' | 'know')
 
 // docs/icon.svg
 const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><path id="body" d="M50 14C42 14 38 22 37 31C36 40 22 46 22 64C22 82 35 94 50 94C65 94 78 82 78 64C78 46 64 40 63 31C62 22 58 14 50 14Z"/><g id="top"><path d="M50 16L52 5" stroke="#6e2a1c" stroke-width="3.5" stroke-linecap="round"/><path d="M52 11C56 4 65 2 71 5C67 12 58 14 52 11Z" fill="#4c9a3c"/></g></defs><rect width="100" height="100" rx="22" fill="#163828"/><g transform="translate(8 1) scale(.98)"><use href="#body" fill="#d2cf48"/><use href="#top"/></g><g transform="translate(74 18.5) scale(-.8 .8)"><use href="#body" fill="#8f9e2a"/><use href="#top"/></g></svg>`
@@ -218,9 +250,10 @@ async function markSeen($: EngineInterface) {
 }
 
 async function openPane($: EngineInterface, focus: boolean) {
-  const r = await $.ui.open({ id: PANE, title: 'pair', ...(focus ? { focus: true as const } : {}) })
+  const r = await $.ui.open({ id: PANE, title: 'AI Shipmates', ...(focus ? { focus: true as const } : {}) })
   await update($, paneOpen, () => r.isPlaced)
   if (focus) await markSeen($)
+  return r
 }
 
 let polling = false // a slow read must not overlap the next tick: both would add the same lines
@@ -274,12 +307,28 @@ async function pollOnce($: EngineInterface) {
   const fresh: (PairEvent & { identity?: string })[] = []
   const delivered: { name: string; peerId?: string }[] = []
   const confirmed: string[] = [] // message ids the peer's pair received (late msg_ok)
+  // AI Shipmates pane (CHANGED 15-Nov-26): crew lists and boards update their atoms (no rows); a refused answer is a
+  // toast; the hub's crew_pass nudge is for its agent only.
+  let newCrew: PairCrew | undefined
+  let newBoard: PairBoard | undefined
+  const refused: string[] = []
+  // → Claude fix (CHANGED 15-Nov-26, bead ship-anj.10): a message that arrives while the "hand to Claude
+  // automatically" option is on AND something delivers this session's events (the monitor, the plugin hooks or a
+  // `pair wait`, the server's own listening() test) already reached Claude: it gets no → Claude button.
+  const live = handToClaudeAuto && (await deliveryLive($, d, now))
   lines.slice(from).forEach((line, i) => {
     try {
       const ev = JSON.parse(line)
       const m = ev.meta ?? {}
-      if (m.kind === 'probe') return
+      if (m.kind === 'probe' || m.kind === 'crew_pass') return
       if (m.kind === 'message_delivered') return void confirmed.push(String(m.id ?? ''))
+      if (m.kind === 'crew') return void (newCrew = m.crew)
+      // The board remembers which pairing (our hub) sent it, so an answer goes back to that pairing.
+      if (m.kind === 'board') {
+        const from = typeof m.peer_id === 'string' && /^p\d{1,10}$/.test(m.peer_id) ? m.peer_id : undefined
+        return void (newBoard = { ...m.board, peerId: from })
+      }
+      if (m.kind === 'answer_refused') return void refused.push(String(ev.content ?? ''))
       const content = String(ev.content ?? '')
       if (m.kind === 'file_delivered') {
         delivered.push({ name: content.match(/received "(.+)"\.$/)?.[1] ?? '', peerId: m.peer_id })
@@ -298,9 +347,21 @@ async function pollOnce($: EngineInterface) {
         path: m.path,
         // Multi-peer (14-Nov-26): only our server's own id shape; anything else is treated as no id.
         peerId: typeof m.peer_id === 'string' && /^p\d{1,10}$/.test(m.peer_id) ? m.peer_id : undefined,
+        summary: typeof m.summary === 'string' && m.summary ? m.summary : undefined,
+        typed: m.typed === true || undefined,
+        fyi: typeof m.fyi === 'string' && m.fyi ? m.fyi : undefined,
+        needs: m.needs && typeof m.needs === 'object' && Array.isArray(m.needs.options) ? m.needs : undefined,
+        agent: typeof m.agent === 'string' && m.agent ? m.agent : undefined,
+        from: typeof m.from === 'string' && m.from ? m.from : undefined,
+        colour: typeof m.colour === 'number' ? m.colour : undefined,
+        human: m.kind === 'decision' && m.human === true ? true : undefined,
+        autoDelivered: live && (m.kind === 'message' || m.kind === 'file') ? true : undefined,
       })
     } catch {}
   })
+  if (newCrew) await update($, crew, () => newCrew!)
+  if (newBoard) await update($, board, () => newBoard!)
+  for (const r of refused) $.ui.toast(r)
   await update($, seen, () => lines.length)
   await update($, status, s => fresh.reduce(nextStatus, s))
   await update($, events, list => {
@@ -321,6 +382,78 @@ async function pollOnce($: EngineInterface) {
   })
   await refreshStatus($)
   if (fresh.some(e => e.kind === 'pair_request' || e.kind === 'paired')) await openPane($, false)
+}
+
+/**
+ * deliveryLive: whether this session's events reach Claude by themselves right now.
+ * WHY: the → Claude button must not hand over again what auto-delivery already gave Claude (bead ship-anj.10), and
+ *   must stay where nothing delivered it (auto-delivery on but no listener: the message would be stranded).
+ * HOW: the server's own test (main.rs listening()): the monitor's watch.alive or `pair wait`'s wait.alive touched in
+ *   the last 30 s, or hook.ok, which a working FileChanged hook writes once per session.
+ * VALUES: 30 s = WATCH_FRESH in server/src/main.rs (heartbeats every 10 s).
+ * INTERACTS WITH: pollOnce (marks rows autoDelivered), main.rs watch() / wait() / hook_inbox() / probe_hooks().
+ * CHANGED: 15-Nov-26 — added for the → Claude double-delivery fix.
+ */
+async function deliveryLive($: EngineInterface, d: string, now: number): Promise<boolean> {
+  const recent = async (f: string) =>
+    $.fs.stat(`${d}/${f}`).then(s => now - Number(s.mtimeMs ?? 0) < 30_000, () => false)
+  return (await recent('watch.alive')) || (await recent('wait.alive')) || (await $.fs.exists(`${d}/hook.ok`))
+}
+
+/**
+ * writeOutbox: append one line to <session dir>/outbox.jsonl, which the server reads (chat, answers, refresh).
+ * CHANGED 15-Nov-26: split out of sendChat so answers and the refresh tap use it too.
+ */
+async function writeOutbox($: EngineInterface, d: string, line: Record<string, unknown>) {
+  const path = `${d}/outbox.jsonl`
+  // ponytail: read-modify-write, no append in $.fs; the server skips ids it has sent, so a rewrite never resends
+  const old = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+  await $.fs.write(path, `${old}${JSON.stringify(line)}\n`)
+}
+
+const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+
+/**
+ * openNeeds: what waits on this pane's person: the crew board's unanswered needs, and on a plain pairing the needs
+ * that came with messages. Ones this pane already answered are left out.
+ * CHANGED 15-Nov-26 — added for the AI Shipmates pane ("Needs you").
+ */
+function openNeeds(list: PairEvent[], b: PairBoard | null, mine: Record<string, string>) {
+  const fromBoard = (b?.needs ?? []).filter(n => !n.answered_by && !mine[n.id]).map(n => ({ need: n, peerId: b?.peerId ?? '' }))
+  const fromRows = list
+    .filter(m => m.kind === 'message' && m.needs && !mine[m.needs.id])
+    .map(m => ({ need: m.needs!, peerId: m.peerId ?? '' }))
+  return [...fromBoard, ...fromRows]
+}
+
+/**
+ * askNeed: the grill-me style picker for one need, in Claude Code's own question dialog: the question with its
+ * context and who asked, the recommended option first and marked; the pick goes to the outbox as an answer.
+ * CHANGED 15-Nov-26 — added for the AI Shipmates pane.
+ */
+async function askNeed($: EngineInterface, d: string, need: PairNeed, peerId: string) {
+  const rec = need.options[need.recommended] ?? need.options[0]!
+  const order = [rec, ...need.options.filter(o => o !== rec)]
+  const labels = order.map(o => (o === rec ? `${o} (Recommended)` : o))
+  const who = need.from ? ` (asked by @${need.from})` : ''
+  let picked: string
+  try {
+    picked = await $.ui.ask(`${need.question}${who}${need.context ? `\n\n${need.context}` : ''}`, {
+      options: labels, header: 'Needs you',
+    })
+  } catch {
+    return // dismissed
+  }
+  const option = order[labels.indexOf(picked)]
+  if (option === undefined) {
+    $.ui.toast('Pick one of the listed options. To add more, message the crew after.')
+    return
+  }
+  await writeOutbox($, d, {
+    id: newId(), answer: { item: need.id, option, question: need.question }, ...(peerId ? { peer: peerId } : {}),
+  })
+  await update($, answered, a => ({ ...a, [need.id]: option }))
+  $.ui.toast(`Sent: ${option}`)
 }
 
 /** Received files that could run when opened go to their folder instead. */
@@ -403,6 +536,11 @@ export const register: Register = (on, options) => {
       await update($, selected, () => '')
       await update($, seenAt, () => 0)
       await update($, paneOpen, () => false)
+      await update($, crew, () => null)
+      await update($, board, () => null)
+      await update($, answered, () => ({}))
+      await update($, expanded, () => [])
+      await update($, view, () => 'chat' as const)
     }
     appleTerminal = (await $.env.get('TERM_PROGRAM')) === 'Apple_Terminal'
     if ((await $.env.get('OS')) === 'Windows_NT') os = 'windows'
@@ -416,8 +554,9 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'pair-pane' }, async $ => {
-    await openPane($, true)
-    return { text: 'pair pane opened.' }
+    // CHANGED 15-Nov-26: say why when no surface could place the pane, instead of always "opened".
+    const r = await openPane($, true)
+    return { text: r.isPlaced ? 'AI Shipmates pane opened.' : `The pane couldn't open here: ${r.reason}` }
   })
 
   on('ui.close', async ($, e, next) => {
@@ -452,12 +591,14 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__plugin_pair_pair__send_to_peer' }, async ($, e, next) => {
     const r = await next(e)
     const text = String((e as { text?: unknown }).text ?? '')
+    // AI Shipmates pane (CHANGED 15-Nov-26): your Claude's own summary heads its row, like every agent's.
+    const summary = String((e as { summary?: unknown }).summary ?? '').trim() || undefined
     if (!r.deny && !r.isError && text) {
       // "delivered", or "queued for sending (not confirmed yet; message id X)" whose message_delivered comes later.
       const said = r.text ?? ''
       const id = said.match(/message id ([\w-]+)/)?.[1] ?? e.tool_use_id
       await addRows($, [
-        { id: `claude-${id}`, kind: 'claude', peer: '', text, at: await $.clock.now(),
+        { id: `claude-${id}`, kind: 'claude', peer: '', text, summary, at: await $.clock.now(),
           ...(said.startsWith('delivered') ? { delivered: true } : {}), ...(await sentTo($, argPeer(e))) },
       ])
     }
@@ -479,9 +620,12 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button, Link } = ui
-    const Input = 'Input' in ui ? ui.Input : undefined // mobile has none: read-only there
+    const Input = 'Input' in ui ? ui.Input : undefined // a surface without one draws the pane read-only
     const [s, list, d, since, current, sel] = await Promise.all([
       read($, status), read($, events), read($, dir), read($, seenAt), read($, tab), read($, selected),
+    ])
+    const [cr, bd, mine, open, shownView] = await Promise.all([
+      read($, crew), read($, board), read($, answered), read($, expanded), read($, view),
     ])
     // Multi-peer (CHANGED 14-Nov-26): `cur` is the pairing the pane shows and the boxes send to; `many` switches on
     // the per-peer parts (peer list, "you → Ann", peer ids on calls). With one pairing the pane draws as before.
@@ -548,17 +692,22 @@ export const register: Register = (on, options) => {
     const peerLine =
       s.peers.length === 0 ? <Text dimColor>Not paired</Text> : <Box flexDirection="column">{s.peers.map(peerRow)}</Box>
     const roomLeft = MAX_PEERS - s.peers.length
+    // AI Shipmates pane (CHANGED 15-Nov-26): "AI Shipmates by Blackbeard Technologies" on top, then one line: the
+    // hub's session summary and the crew. The per-pairing rows stay for pairing, trust and picking a peer.
+    const crewNames = cr ? ['@hub', ...cr.members.map(x => `@${x.handle}`)].join(', ') : ''
+    const subLine = [bd?.summary, crewNames].filter(Boolean).join(' · ')
     const header = (
       <Box flexDirection="row" gap={1}>
         {icon}
         <Box flexDirection="column">
           <Text>
             <Text bold color={ACCENT}>
-              pair
+              AI Shipmates
             </Text>
-            {desk ? ' · ' : ' @ '}
-            <Link href={SITE}>blackbeard.tech</Link>
+            <Text dimColor> by </Text>
+            <Link href={SITE}>Blackbeard Technologies</Link>
           </Text>
+          {subLine && <Text dimColor>{subLine}</Text>}
           {peerLine}
           {s.peers.length > 0 &&
             (roomLeft > 0 ? (
@@ -600,13 +749,12 @@ export const register: Register = (on, options) => {
     const sendChat = async (value: string) => {
       const text = value.trim()
       if (!text || !d) return
-      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-      const path = `${d}/outbox.jsonl`
-      // ponytail: read-modify-write, no append in $.fs; the server skips ids it has sent, so a rewrite never resends
-      const old = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+      const id = newId()
       // The line names its pairing (a server before multi-peer support ignores the field).
-      const line = cur?.id ? { id, text, peer: cur.id } : { id, text }
-      await $.fs.write(path, `${old}${JSON.stringify(line)}\n`)
+      // AI Shipmates pane (CHANGED 15-Nov-26): on a crew's hub the box messages the whole crew (peer "all"); a
+      // member's text goes to its hub, which relays it when it starts with @all or @name.
+      const toCrew = cr?.you === 'hub'
+      await writeOutbox($, d, toCrew ? { id, text, peer: 'all' } : cur?.id ? { id, text, peer: cur.id } : { id, text })
       await addRows($, [
         { id: `out-${id}`, kind: 'sent', peer: '', text, at: await $.clock.now(), peerId: cur?.id || undefined,
           to: cur?.peer ? shortPeer(cur.peer) : undefined },
@@ -681,8 +829,30 @@ export const register: Register = (on, options) => {
 
     // Multi-peer (CHANGED 14-Nov-26): with several pairings, your side's rows say who they went to.
     const to = (m: PairEvent) => (many && m.to ? ` → ${m.to}` : '')
-    const who = (m: PairEvent) =>
-      m.kind === 'sent' ? `you${to(m)}` : m.kind === 'claude' ? `your Claude${to(m)}` : m.peer || 'pair'
+    /*
+     * row: one chat row, drawn as a bubble (AI Shipmates pane, CHANGED 15-Nov-26).
+     * WHY: the approved mock-up (BRIEF.md v10-v11): others on the left with their model's logo and a coloured name,
+     *   your own Claude and your own typed text on the right; an agent's row shows its summary and opens to the full
+     *   text; a person's typed text is shown in full with its own outline; decisions are a centred line.
+     * HOW: a Box per row, alignSelf flex-start / flex-end, a round border (silver for yours, grey for others, light
+     *   and bold for typed text). The [+ full] button toggles the row id in `expanded`. Name colour = the hub's
+     *   palette slot, else the pairing's position. The → Claude button shows only for rows auto-delivery didn't
+     *   already hand to Claude (bead ship-anj.10).
+     * VALUES: colours from NAMES / TYPED (BB-Tech palette, top of this file).
+     * INTERACTS WITH: pollOnce (row fields), the send_to_peer watcher (your Claude's summary), types PairEvent.
+     */
+    const youHandle = cr?.you
+    const nameOf = (m: PairEvent) => (m.from ? `@${m.from === youHandle ? `${m.from} (you)` : m.from}` : m.peer || 'pair')
+    const colourOf = (m: PairEvent) =>
+      NAMES[(m.colour ?? Math.max(0, s.peers.findIndex(p => p.id === m.peerId) + 1)) % NAMES.length]
+    const logo = (agent?: string) => {
+      if (!agent || !AGENT_GLYPH[agent]) return <Text dimColor>●</Text>
+      if (desk && AGENT_SVG[agent]) {
+        const { Svg } = $.ui.resolve(e)
+        return <Svg source={AGENT_SVG[agent]!} alt={agent} width={14} height={14} />
+      }
+      return <Text color={AGENT_GLYPH[agent]!.color}>{AGENT_GLYPH[agent]!.ch}</Text>
+    }
     const row = (m: PairEvent) => {
       const fresh = isNew(m, since)
       const fromPeer = m.kind === 'message' || m.kind === 'file'
@@ -691,34 +861,74 @@ export const register: Register = (on, options) => {
         const line =
           m.kind === 'pair_request' ? `${m.peer} wants to pair.`
           : m.kind === 'paired' ? `Paired with ${m.peer}.`
+          : m.kind === 'decision' ? m.text.split('\n').filter(l => /^(Question|Answer):/.test(l)).join(' · ') || m.text
           : m.text
         return (
-          <Text dimColor>
-            {time(m.at)} · {line}
-          </Text>
+          <Box alignSelf="center">
+            <Text dimColor={m.kind !== 'decision'} color={m.kind === 'decision' ? TYPED : undefined}>
+              {m.kind === 'decision' ? '✓ HUMAN decision · ' : ''}
+              {time(m.at)} · {line}
+            </Text>
+          </Box>
         )
       }
+      const right = m.kind === 'sent' || m.kind === 'claude'
+      const typed = m.kind === 'sent' || m.typed === true
+      const isOpen = open.includes(m.id)
+      // An agent row shows its summary. With none (an older peer, or pair's own crew notices) a long or multi-line
+      // text shows its first line, marked as not a real summary (brief scope 3).
+      const firstLine = m.text.split('\n')[0] ?? ''
+      const fallback =
+        !m.summary && (m.text.includes('\n') || m.text.length > 160)
+          ? firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine
+          : undefined
+      const head = typed || m.kind === 'file' ? undefined : m.summary ?? fallback
+      const short = !!head && head !== m.text.trim()
+      const toggle = () => update($, expanded, x => (x.includes(m.id) ? x.filter(i => i !== m.id) : [...x, m.id]))
       return (
-        <Box flexDirection="column">
-          <Text>
-            <Text dimColor>{time(m.at)} · </Text>
-            <Text color={fromPeer ? ACCENT : undefined} dimColor={!fromPeer}>
-              {who(m)}
+        <Box
+          flexDirection="column"
+          alignSelf={right ? 'flex-end' : 'flex-start'}
+          borderStyle={typed ? 'bold' : 'round'}
+          borderColor={typed ? TYPED : right ? ACCENT : '#505050'}
+          paddingX={1}
+        >
+          <Box flexDirection="row" gap={1}>
+            {!right && logo(m.agent)}
+            <Text>
+              <Text bold color={right ? ACCENT : colourOf(m)}>
+                {right ? (m.kind === 'sent' ? `you${to(m)}` : `your Claude${to(m)}`) : nameOf(m)}
+              </Text>
+              {typed && <Text dimColor> · typed</Text>}
+              <Text dimColor> · {time(m.at)}</Text>
+              {fresh && <Text color={SOON}> new</Text>}
+              {m.delivered && <Text color={ACCENT}> delivered</Text>}
             </Text>
-            {fresh && <Text color={SOON}> new</Text>}
-            {m.delivered && <Text color={ACCENT}> delivered</Text>}
-          </Text>
+          </Box>
           {m.kind === 'file' ? (
             <Text>
               ▤ {m.name} <Text dimColor>· {bytes(m.size)} · saved to received/</Text>
             </Text>
+          ) : short ? (
+            <Text>
+              {head}
+              {!m.summary && <Text dimColor> · no summary</Text>}
+            </Text>
           ) : (
             <Text>{m.text}</Text>
           )}
+          {short && isOpen && <Text dimColor>{m.text}</Text>}
+          {short && (
+            <Button key={`full-${m.id}`} plain onPress={toggle}>
+              <Text dimColor>{isOpen ? '− less' : '+ full'}</Text>
+            </Button>
+          )}
+          {m.fyi && <Text color={KNOW}>ⓘ {m.fyi}</Text>}
+          {m.needs && !mine[m.needs.id] && <Text color={NEED}>? needs you: {m.needs.question}</Text>}
           {fromPeer &&
             (m.handedAt ? (
               <Text dimColor>handed to Claude {time(m.handedAt)}</Text>
-            ) : (
+            ) : m.autoDelivered ? null : (
               <Box flexDirection="row" gap={1}>
                 <Button
                   key={`hand-${m.id}`}
@@ -739,6 +949,54 @@ export const register: Register = (on, options) => {
       )
     }
 
+    /*
+     * The bottom chips (AI Shipmates pane, CHANGED 15-Nov-26): "Needs you (n)" opens the oldest open need in Claude
+     * Code's own question dialog (recommended option first, its context inside); "You should know (n)" swaps the chat
+     * for the fyi list (crew board items, plus fyi lines on messages). ↻ asks the hub for a fresh crew board.
+     * Drawn after the chat and before the message box, so they sit at the bottom of the pane.
+     */
+    const needsOpen = openNeeds(list, bd, mine)
+    const knowItems = [
+      ...(bd?.fyi ?? []).map(f => ({ id: f.id, from: f.from, text: f.text })),
+      ...list.filter(m => m.fyi && !bd).map(m => ({ id: m.id, from: m.from ?? m.peer, text: m.fyi! })),
+    ]
+    const nextNeed = needsOpen[0]
+    const chips = (
+      <Box flexDirection="row" gap={2}>
+        <Button
+          key="needs"
+          hotkey="n"
+          {...(nextNeed ? { variant: 'primary' as const } : {})}
+          onPress={() => (nextNeed && d ? askNeed($, d, nextNeed.need, nextNeed.peerId) : say('Nothing needs you right now.'))}
+        >
+          <Text color={needsOpen.length ? NEED : undefined}>Needs you ({needsOpen.length})</Text>
+        </Button>
+        <Button key="know" hotkey="k" onPress={() => update($, view, v => (v === 'know' ? 'chat' : 'know'))}>
+          <Text color={knowItems.length ? KNOW : undefined}>
+            {shownView === 'know' ? 'Back to chat' : `You should know (${knowItems.length})`}
+          </Text>
+        </Button>
+        {cr && d && (
+          <Button key="refresh" plain onPress={() => writeOutbox($, d, { id: newId(), refresh: true }).then(() => say('Asked for a fresh crew summary.'))}>
+            <Text dimColor>↻</Text>
+          </Button>
+        )}
+      </Box>
+    )
+    const knowList = (
+      <Box flexDirection="column">
+        <Text bold color={KNOW}>You should know</Text>
+        {knowItems.length === 0 && <Text dimColor>Nothing yet.</Text>}
+        {knowItems.slice(-room).map(k => (
+          <Text>
+            <Text color={KNOW}>ⓘ </Text>
+            {k.text}
+            {k.from && <Text dimColor> · @{k.from}</Text>}
+          </Text>
+        ))}
+      </Box>
+    )
+
     const chatTab = (
       <Box flexDirection="column" gap={1}>
         {request && (
@@ -754,15 +1012,27 @@ export const register: Register = (on, options) => {
         {!handToClaudeAuto && phase === 'paired' && (
           <Text dimColor>Messages wait here until you press → Claude (setting: Hand messages to Claude automatically).</Text>
         )}
-        {chat.length === 0 && <Text dimColor>No messages yet.</Text>}
-        {chat.slice(-room).map(row)}
+        {shownView === 'know' ? knowList : (
+          <Box flexDirection="column" gap={1}>
+            {chat.length === 0 && <Text dimColor>No messages yet.</Text>}
+            {chat.slice(-room).map(row)}
+          </Box>
+        )}
+        {chips}
         {Input && (phase === 'paired' || phase === 'reconnecting') && d && (
           <Box flexDirection="column">
-            <Text dimColor>Message {peer} (sent as you, not via Claude){many ? ' · pick another peer above' : ''}</Text>
+            <Text dimColor>
+              {cr?.you === 'hub'
+                ? 'Message the whole crew (sent as you, not via Claude)'
+                : cr
+                  ? 'Message the hub (sent as you); start with @all for the whole crew, @name for one shipmate'
+                  : `Message ${peer} (sent as you, not via Claude)`}
+              {many && cr?.you !== 'hub' ? ' · pick another peer above' : ''}
+            </Text>
             <Input key="chat" placeholder="Type and press Enter" submitLabel="send" onSubmit={sendChat} />
           </Box>
         )}
-        {!desk && <Text dimColor>Tab focus · c hand to Claude · f files</Text>}
+        {!desk && <Text dimColor>Tab focus · n needs you · k you should know · c hand to Claude · f files</Text>}
       </Box>
     )
 
@@ -786,9 +1056,11 @@ export const register: Register = (on, options) => {
                   {desk ? 'Show' : 'Reveal'}
                 </Button>
               )}
-              <Button key={`hand-${f.id}`} variant="primary" onPress={() => handToClaude($, f)}>
-                → Claude
-              </Button>
+              {!f.handedAt && !f.autoDelivered && (
+                <Button key={`hand-${f.id}`} variant="primary" onPress={() => handToClaude($, f)}>
+                  → Claude
+                </Button>
+              )}
             </Box>
           ))}
         </Box>
@@ -843,21 +1115,25 @@ export const register: Register = (on, options) => {
     const lastFile = [...fresh].reverse().find(m => m.kind === 'file')
     const latest = fresh[fresh.length - 1]!
     const clip = (t: string) => (t.length > 48 ? `${t.slice(0, 47)}…` : t)
+    // → Claude fix (CHANGED 15-Nov-26): only offered when Claude doesn't already have it.
+    const handable = !latest.autoDelivered && (latest.kind === 'message' || latest.kind === 'file')
     return (
       <Box flexDirection="row" gap={1}>
         <Text bold color={ACCENT}>
-          pair
+          AI Shipmates
         </Text>
-        <Text bold>{latest.peer || (s.peers[0]?.peer ? shortPeer(s.peers[0].peer) : '')}</Text>
+        <Text bold>{latest.from ? `@${latest.from}` : latest.peer || (s.peers[0]?.peer ? shortPeer(s.peers[0].peer) : '')}</Text>
         <Text color={SOON}>{fresh.length} new</Text>
-        {lastMsg && <Text dimColor>· “{clip(lastMsg.text)}”</Text>}
+        {lastMsg && <Text dimColor>· “{clip(lastMsg.summary ?? lastMsg.text)}”</Text>}
         {lastFile && <Text dimColor>· sent you {lastFile.name}</Text>}
         <Button key="open" hotkey="1" onPress={() => openPane($, true)}>
           Open pane
         </Button>
-        <Button key="latest" hotkey="2" variant="primary" onPress={() => handToClaude($, latest)}>
-          Latest → Claude
-        </Button>
+        {handable && (
+          <Button key="latest" hotkey="2" variant="primary" onPress={() => handToClaude($, latest)}>
+            Latest → Claude
+          </Button>
+        )}
         <Button key="dismiss" plain role="dismiss" onPress={() => markSeen($)}>
           ×
         </Button>
