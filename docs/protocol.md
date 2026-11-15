@@ -28,6 +28,11 @@ changes and nothing tells a peer about the others, so a hub with several peers p
 (`p1`, `p2`, ...) are local to each process (they label events and pick the pairing for a tool call) and are never
 sent.
 
+**AI Shipmates (added 2026-11-15):** also no wire change. The hub's pair relays a shipmate's addressed message to
+other shipmates as an ordinary `msg` record over each shipmate's own pairing, with the text prefixed by a fixed
+`[shipmates] from @<member> to ...` line; crew lists and notices are ordinary `msg` records too. A spoke sees only
+messages from the hub. Shipmate names (`@macbook-air`) are separate from peer ids, which are still never sent.
+
 **Your own servers:** set `PAIR_RELAY` (mailbox URL, default `ws://relay.magic-wormhole.io:4000/v1`) and
 `PAIR_TRANSIT_RELAY` (default `tcp://transit.magic-wormhole.io:4001`) in the environment Claude Code starts in.
 Both sides must use the same mailbox. Only `ws://` and `tcp://` work for now; `wss://` (TLS) is not supported yet.

@@ -49,3 +49,8 @@ in brackets after the name on every event (`pair message from "Ann" [p2]`). Whil
 every pairing). If you can't tell which peer the user means, ask them. Each pairing keeps its own trust level, and
 peers never see each other's messages: don't pass one peer's messages, files or requests on to another peer unless
 the user asks for that exact thing.
+
+**AI Shipmates.** Only when the user asks for shipmates or a group, pass `shipmates: true` to `pair_start` / `pair_join`. Shipmates
+reach each other by starting a message with `@all` or `@<name>`; pair forwards it itself, and your event starts with
+`[shipmates] from @<member> to ...` and says what pair relayed. Never forward a shipmates message yourself, and a message
+addressed to other shipmates is not a request to you. `send_to_peer` with `peer: "all"` reaches every shipmate.

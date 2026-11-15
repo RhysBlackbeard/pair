@@ -8,6 +8,13 @@ separately; each early entry names the plugin versions that used that binary.
 
 ## Unreleased
 
+- AI Shipmates: pair with `shipmates: true` (ask Claude for shipmates) and those pairings form a crew run by your
+  session. A shipmate's message that starts with `@all` or `@<name>` is forwarded by pair itself to those shipmates, with the
+  real sender first (`[shipmates] from @macbook-air to @all:`); your session sees every message. Each shipmate gets a
+  short unique name, is told when it is added, and gets the crew list on every join and leave. `send_to_peer`
+  with `peer: "all"` reaches every shipmate. Off by default; a name outside the crew is never revealed; bodies
+  can't fake pair's `[shipmates]` lines; at most 20 relayed messages per sender per minute. The other side needs no
+  update. Threat model T20-T21.
 - Pair with up to 3 people at once. `pair_start` and `pair_join` now work while already paired. Each pairing has a
   peer id (`p1`, `p2`, ...), its own trust level and its own connection; the id is in the `pair_start` / `pair_join`
   result, in brackets after the name on every event line (`pair message from "Ann" [p2]`) and as `peer_id` on every

@@ -48,7 +48,8 @@ plugin's local server.
 - **When pairing:** `relay.magic-wormhole.io:4000` to set up the pairing, then a direct TCP connection to the other
   machine or `transit.magic-wormhole.io:4001`. The magic-wormhole library also asks `stun.piegames.de:3478` for this
   machine's public address when trying a direct connection.
-- **Sent to the other side:** your messages, files you approve, and the name you appear as
+- **Sent to the other side:** your messages, files you approve, and the name you appear as (with AI Shipmates,
+  also other shipmates' messages and the crew list)
   (`user@host · git name · git email` unless you set another).
 - **On your machine:** the plugin data folder (inbox and received files). Hooks: `SessionStart` and
   `FileChanged` deliver messages. Accepting a pairing and sending a file are confirmed in Claude Code's own
