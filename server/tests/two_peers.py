@@ -206,7 +206,8 @@ text, err = w.tool("unpair")
 assert not err and text == "Unpaired.", text
 assert "you unpaired" in w.event("unpaired")["content"]
 inbox = w.tool("check_messages")[0]
-assert "[unpaired]:" in inbox and "from :" not in inbox, inbox  # no peer yet: no "from" (GitHub #8)
+# no peer yet: no "from" (GitHub #8), but the peer id still names the pairing (CHANGED 15-Nov-26, live hub test)
+assert "[unpaired] [p1]:" in inbox and "from :" not in inbox, inbox
 with open(os.path.join(os.path.dirname(w.inbox), "outbox.jsonl"), "a") as f:
     f.write(json.dumps({"text": "nobody to send to"}) + "\n")
 assert "not paired" in w.event("outbox_failed")["content"]
@@ -300,7 +301,7 @@ code = code_of(text)
 h.tool("pair_join", code=code, name="Hal")
 line = wq.get(timeout=30)
 print("  watch <-", line[:90])
-assert line.startswith('pair pair_request from "Hal": '), line
+assert line.startswith('pair pair_request from "Hal" [p1]: '), line
 assert not g.tool("pair_accept")[1]
 h.event("paired")
 with open(os.path.join(sdir, "outbox.jsonl"), "a") as f:  # its msg_ok lands in G's inbox: not for Claude
@@ -309,7 +310,7 @@ h.event("message")
 assert not h.tool("send_to_peer", text="line1\nline2")[1]
 line = wq.get(timeout=30)
 print("  watch <-", line)
-assert line == 'pair message from "Hal" (trust: read-only): "line1\\nline2"', line
+assert line == 'pair message from "Hal" [p1] (trust: read-only): "line1\\nline2"', line
 if os.name != "nt":
     assert os.stat(os.path.join(sdir, "inbox.jsonl")).st_mode & 0o777 == 0o600
 g.tool("unpair")
@@ -394,7 +395,7 @@ assert flagged == {"pair_accept", "send_file"}, flagged
 assert not m.tool("pair_accept")[1]
 n.event("paired")
 n.tool("send_to_peer", text="one")
-assert wakes.get(timeout=30) == ['pair message from "Ned" (trust: read-only): "one"']
+assert wakes.get(timeout=30) == ['pair message from "Ned" [p1] (trust: read-only): "one"']
 sdir = os.path.dirname(watched)
 open(os.path.join(sdir, "watch.alive"), "w").close()  # a terminal monitor is delivering
 n.tool("send_to_peer", text="two")
@@ -402,12 +403,12 @@ time.sleep(3)
 assert wakes.empty(), "hook must stay silent while the monitor delivers"
 os.remove(os.path.join(sdir, "watch.alive"))
 n.tool("send_to_peer", text="three")
-assert wakes.get(timeout=30) == ['pair message from "Ned" (trust: read-only): "three"'], "no re-delivery of two"
+assert wakes.get(timeout=30) == ['pair message from "Ned" [p1] (trust: read-only): "three"'], "no re-delivery of two"
 with open(os.path.join(sdir, "outbox.jsonl"), "a") as f:  # its msg_ok lands in M's inbox: no wake
     f.write(json.dumps({"id": "m0", "text": "from M's pane"}) + "\n")
 n.event("message")
 n.tool("send_to_peer", text="four")
-assert wakes.get(timeout=30) == ['pair message from "Ned" (trust: read-only): "four"']
+assert wakes.get(timeout=30) == ['pair message from "Ned" [p1] (trust: read-only): "four"']
 assert fire(os.path.join(tempfile.mkdtemp(), "inbox.jsonl"))[0] == 0  # a project-folder inbox.jsonl is ignored
 m.tool("unpair")
 n.event("unpaired")
@@ -459,5 +460,63 @@ if os.name != "nt":
     # Claude Code closing a session says bye, so the peer ends at once instead of trying to reconnect.
     r.p.stdin.close()
     assert "other side unpaired" in s.event("unpaired", timeout=10)["content"]
+
+# Multi-peer hub (added 14-Nov-26): one session pairs with three others at once, each with its own peer id; a fourth
+# pairing is refused; tools that act on one pairing refuse to guess when more than one fits; each peer receives only
+# what was sent to it; unpairing one leaves the others up and frees the slot; ids are never reused.
+hub = Peer("HUB")
+spokes = [Peer(f"S{i}") for i in range(1, 4)]
+for i, s in enumerate(spokes, 1):
+    text, err = hub.tool("pair_start", name="Hub")
+    assert not err and f"Peer id: p{i}" in text, text
+    s.tool("pair_join", code=code_of(text), name=f"Spoke{i}")
+    req = hub.event("pair_request")
+    assert req["meta"]["peer_id"] == f"p{i}" and f"peer id p{i}" in req["content"], req
+    # Only one request is pending each time, so `peer` may be left out; pass it from the second on anyway.
+    assert not hub.tool("pair_accept", **({"peer": f"p{i}"} if i > 1 else {}))[1]
+    assert s.event("paired")["meta"]["peer_id"] == "p1"  # the spoke's own id for its only pairing
+text, err = hub.tool("pair_start", name="Hub")
+assert err and "3 pairings open" in text, text
+text, err = hub.tool("send_to_peer", text="who gets this?")
+assert err and "more than one peer" in text, text
+for i in range(1, 4):
+    assert not hub.tool("send_to_peer", text=f"for spoke {i}", peer=f"p{i}")[1]
+for i, s in enumerate(spokes, 1):
+    assert s.event("message")["content"] == f"for spoke {i}"  # and nothing meant for another spoke
+for i, s in enumerate(spokes, 1):
+    assert not s.tool("send_to_peer", text=f"reply {i}")[1]  # a spoke with one peer needs no `peer`
+got = {}
+for _ in range(3):
+    e = hub.event("message")
+    got[e["meta"]["peer_id"]] = (e["meta"]["peer"], e["content"])
+assert got == {f"p{i}": (f"Spoke{i}", f"reply {i}") for i in range(1, 4)}, got
+inbox = hub.tool("check_messages")[0]
+assert "State: 3 pairings" in inbox and "from Spoke2 [p2]" in inbox, inbox
+assert re.search(r'p2 "Spoke2" \(Paired, trust: read-only, (direct|via relay)\)', inbox), inbox  # per-peer state
+ob = os.path.join(os.path.dirname(hub.inbox), "outbox.jsonl")  # the pane: a line may name its peer
+with open(ob, "a") as f:
+    f.write(json.dumps({"id": "m1", "text": "pane to three", "peer": "p3"}) + "\n")
+    f.write(json.dumps({"id": "m2", "text": "pane to whom?"}) + "\n")
+assert spokes[2].event("message")["content"] == "pane to three"
+assert "more than one peer" in hub.event("outbox_failed")["content"]
+assert not hub.tool("send_file", path=os.path.abspath(__file__), peer="p2")[1]
+spokes[1].event("file")
+assert hub.event("file_delivered")["meta"]["peer_id"] == "p2"
+assert hub.tool("unpair")[1], "unpair with three peers and no `peer` must refuse"
+assert hub.tool("unpair", peer="p2")[0] == "Unpaired."
+assert "other side unpaired" in spokes[1].event("unpaired")["content"]
+assert hub.event("unpaired")["meta"]["peer_id"] == "p2"
+assert hub.tool("send_to_peer", text="stale", peer="p2")[1], "an ended pairing's id must reach nobody"
+assert not hub.tool("send_to_peer", text="still here", peer="p1")[1]
+assert spokes[0].event("message")["content"] == "still here"
+text, err = hub.tool("pair_start", name="Hub")  # the freed slot; a new id, never p2 again
+assert not err and "Peer id: p4" in text, text
+assert hub.tool("unpair", peer="p4")[0] == "Unpaired."
+assert hub.event("unpaired")["meta"]["peer_id"] == "p4"
+assert hub.tool("unpair", peer="all")[0] == "Unpaired from all peers."
+for s in (spokes[0], spokes[2]):
+    assert "other side unpaired" in s.event("unpaired")["content"]
+assert {hub.event("unpaired")["meta"]["peer_id"] for _ in range(2)} == {"p1", "p3"}
+assert "State: Idle" in hub.tool("check_messages")[0]
 
 print("PASS")
