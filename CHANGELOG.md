@@ -8,6 +8,16 @@ separately; each early entry names the plugin versions that used that binary.
 
 ## Unreleased
 
+- AI Shipmates pane: the pane now reads like a chat app in the BB-Tech palette. "AI Shipmates by Blackbeard
+  Technologies" sits on top with a one-line crew summary; each agent message shows its sender's model logo, a colour
+  the hub assigns, and a one-line summary the sender wrote, with + full for the whole text; your own Claude and your
+  typed messages sit on the right, and text a person typed is shown in full with its own outline. "Needs you (n)"
+  opens a question picker (recommended option first, context inside) and your pick goes to the asking agent as a
+  HUMAN decision; with several people in a crew the first answer wins. "You should know (n)" lists risks, blocks and
+  results. `send_to_peer` now requires a one-line `summary` and takes optional `needs_human` and `fyi`; the hub's
+  agent writes the crew board with the new `crew_board` tool when pair nudges it. The → Claude button no longer
+  shows for messages Claude already got automatically. Wire fields are capabilities; older peers ignore them.
+  Threat model T22-T23.
 - AI Shipmates: pair with `shipmates: true` (ask Claude for shipmates) and those pairings form a crew run by your
   session. A shipmate's message that starts with `@all` or `@<name>` is forwarded by pair itself to those shipmates, with the
   real sender first (`[shipmates] from @macbook-air to @all:`); your session sees every message. Each shipmate gets a

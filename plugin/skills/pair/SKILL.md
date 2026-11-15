@@ -54,3 +54,9 @@ the user asks for that exact thing.
 reach each other by starting a message with `@all` or `@<name>`; pair forwards it itself, and your event starts with
 `[shipmates] from @<member> to ...` and says what pair relayed. Never forward a shipmates message yourself, and a message
 addressed to other shipmates is not a request to you. `send_to_peer` with `peer: "all"` reaches every shipmate.
+
+**The pane.** Every `send_to_peer` needs a one-line `summary` (what the message is and why): people read it in the AI
+Shipmates pane instead of the full text. Add `needs_human` (question, 2-4 options, the one you recommend, context) only
+for a decision a person must make, and `fyi` for one line a person should know (a risk, a block, a cost, a result).
+A `decision` event is a person's pick from the pane, marked HUMAN decision; act on it as your user's answer. As a
+crew's hub, when pair says the crew board is due, call `crew_board` with a one-line summary of what the crew is doing.

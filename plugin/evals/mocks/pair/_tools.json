@@ -94,11 +94,48 @@
       "name": "pair_reject"
     },
     {
-      "description": "Send a message to a paired agent. Only that peer receives it; other peers never see it.",
+      "description": "Send a message to a paired agent. Only that peer receives it; other peers never see it. Every message needs a one-line `summary`: people read it in the AI Shipmates pane instead of the full text.",
       "inputSchema": {
         "properties": {
+          "fyi": {
+            "description": "Optional. One line (at most 200 characters) a person should know: a risk, a block, a cost, a finished result. Shown under \"You should know\".",
+            "type": "string"
+          },
+          "needs_human": {
+            "description": "Optional. A decision only a person can make. It shows under \"Needs you\" in the pane; the person's pick comes back to you as a HUMAN decision event.",
+            "properties": {
+              "context": {
+                "description": "What the person needs to know to decide.",
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "minItems": 2,
+                "type": "array"
+              },
+              "question": {
+                "type": "string"
+              },
+              "recommended": {
+                "description": "Index (0-based) of the option you recommend.",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "question",
+              "options"
+            ],
+            "type": "object"
+          },
           "peer": {
             "description": "Peer id of the pairing this is for, e.g. p2 (shown as [p2] on events). Required when more than one pairing could be meant; may be left out with a single peer. \"all\" sends to every shipmate.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "Required. One line, at most 160 characters, that says what this message is and why, for the person reading the pane (e.g. \"Tests pass; asks which version to tag\"). Not a copy of the first line.",
             "type": "string"
           },
           "text": {
@@ -106,11 +143,65 @@
           }
         },
         "required": [
-          "text"
+          "text",
+          "summary"
         ],
         "type": "object"
       },
       "name": "send_to_peer"
+    },
+    {
+      "description": "AI Shipmates hub only: publish the crew board every member's pane shows. Call it when pair says the crew board is due: a one-line session summary, plus any question a person must decide or anything a person should know that the crew raised without tagging. It sends nothing to the crew's agents.",
+      "inputSchema": {
+        "properties": {
+          "fyi": {
+            "description": "Lines a person should know that nobody tagged.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "needs": {
+            "description": "Questions a person must decide that nobody tagged.",
+            "items": {
+              "description": "Optional. A decision only a person can make. It shows under \"Needs you\" in the pane; the person's pick comes back to you as a HUMAN decision event.",
+              "properties": {
+                "context": {
+                  "description": "What the person needs to know to decide.",
+                  "type": "string"
+                },
+                "options": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 4,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "question": {
+                  "type": "string"
+                },
+                "recommended": {
+                  "description": "Index (0-based) of the option you recommend.",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "question",
+                "options"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "description": "One line, at most 160 characters: what the crew is doing now. Never list what waits on a person (that is what needs is for).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "crew_board"
     },
     {
       "_meta": {

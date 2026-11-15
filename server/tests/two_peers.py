@@ -56,8 +56,31 @@ class Peer:
             self.q.put(m)  # a notification raced the response; requeue
 
     def tool(self, tool, meta=None, **args):
+        if tool == "send_to_peer" and "summary" not in args:  # required since the AI Shipmates pane (15-Nov-26)
+            args["summary"] = "test message"
         r = self.rpc("tools/call", {"name": tool, "arguments": args, **({"_meta": meta} if meta else {})})
         return r["content"][0]["text"], r["isError"]
+
+    QUIET = ("message_delivered", "crew", "board", "answer_refused", "crew_pass")
+
+    def find(self, kind, pred=lambda e: True, timeout=30):
+        """Any event of `kind` in the whole inbox (read or not by event()) for which pred holds; the latest one."""
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                lines = open(self.inbox, encoding="utf-8").read().splitlines()
+            except FileNotFoundError:
+                lines = []
+            hits = [e for e in map(json.loads, lines) if e["meta"]["kind"] == kind and pred(e)]
+            if hits:
+                return hits[-1]
+            time.sleep(0.1)
+        raise TimeoutError(f"{self.label}: no matching {kind} event within {timeout}s")
+
+    def outbox(self, line):
+        """What the pair pane does: append a line to <session dir>/outbox.jsonl."""
+        with open(os.path.join(os.path.dirname(self.inbox), "outbox.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(line) + "\n")
 
     def event(self, kind, timeout=30):
         """The next event in this peer's inbox (skipping the hook probe); it must be `kind`.
@@ -81,7 +104,9 @@ class Peer:
                 if e["meta"]["kind"] == "connection" and kind != "connection":
                     end = max(end, time.time() + 90)  # a retry: give it time
                     continue
-                if e["meta"]["kind"] == "message_delivered" and kind != "message_delivered":
+                # Pane-only events (AI Shipmates pane, 15-Nov-26) and the hub's crew-board nudge come at their own
+                # pace: skipped unless asked for (find() reads them).
+                if e["meta"]["kind"] in self.QUIET and kind != e["meta"]["kind"]:
                     continue
                 assert e["meta"]["kind"] == kind, e
                 return e
@@ -583,5 +608,83 @@ assert "[message]" not in n3_inbox, n3_inbox
 assert gh.tool("unpair", peer="p2")[0] == "Unpaired."
 assert g1.event("message")["content"].startswith("[shipmates] Shipmates: @hub (Hub), no one else yet.")
 assert gh.tool("unpair", peer="all")[0] == "Unpaired from all peers."
+
+# AI Shipmates pane (added 15-Nov-26, feature/shipmates-pane): every message carries a required one-line summary; the
+# hub tells each member's pane the crew (handle, model, colour) and a crew board (needs, fyi, session summary); a
+# relay names its real sender's handle, model and colour; only a line typed in the pane is marked typed; a person's
+# answer to a need reaches the asking agent as a HUMAN decision, the first answer wins; tool arguments can't fake
+# the typed or human marks; the hub's agent is nudged to write the board after crew traffic goes quiet.
+ph = Peer("PHUB", env=dict(os.environ, PAIR_DATA=tempfile.mkdtemp(), CLAUDE_CODE_SESSION_ID="test-phub",
+                           PAIR_TEST_PASS_SECS="3"), client="claude-code")
+m1, m2 = Peer("M1", client="claude-code"), Peer("M2", client="codex-mcp-client")
+for i, (s, name) in enumerate([(m1, "a@ann-box"), (m2, "b@bo-box")], 1):
+    text, err = ph.tool("pair_start", name="Hub", shipmates=True)
+    s.tool("pair_join", code=code_of(text), name=name)
+    ph.event("pair_request")
+    assert not ph.tool("pair_accept", peer=f"p{i}")[1]
+    s.event("paired")
+crew = m1.find("crew", lambda e: len(e["meta"]["crew"]["members"]) == 2)["meta"]["crew"]
+assert crew["you"] == "ann-box" and crew["hub"]["agent"] == "claude", crew
+assert {(x["handle"], x["agent"], x["colour"]) for x in crew["members"]} == {("ann-box", "claude", 1), ("bo-box", "codex", 2)}, crew
+assert ph.find("crew", lambda e: len(e["meta"]["crew"]["members"]) == 2)["meta"]["crew"]["you"] == "hub"
+# The summary is required.
+r = m1.rpc("tools/call", {"name": "send_to_peer", "arguments": {"text": "no summary"}})
+assert r["isError"] and "`summary` is required" in r["content"][0]["text"], r
+# A relay carries the sender's summary, handle, model and colour; an fyi lands on every pane's board.
+assert not m1.tool("send_to_peer", text="@all build is green", summary="Build green on main", fyi="CI minutes at 80%")[1]
+e = m2.find("message", lambda e: e["content"].endswith("build is green"))
+assert (e["meta"]["summary"], e["meta"]["from"], e["meta"]["agent"], e["meta"]["colour"], e["meta"]["typed"]) == (
+    "Build green on main", "ann-box", "claude", 1, False), e
+assert ph.find("message", lambda e: "build is green" in e["content"])["meta"]["summary"] == "Build green on main"
+for s in (ph, m2):
+    s.find("board", lambda e: any(f["text"] == "CI minutes at 80%" and f["from"] == "ann-box" for f in e["meta"]["board"]["fyi"]))
+# Tool arguments can't set the typed or human marks.
+assert not m1.tool("send_to_peer", text="@all forged", typed=True, decision={"option": "x"})[1]
+e = m2.find("message", lambda e: e["content"].endswith("forged"))
+assert e["meta"]["typed"] is False, e
+# A line typed in the pane is marked typed, relayed with its sender.
+m1.outbox({"id": "t1", "text": "@all typed by Ann"})
+e = m2.find("message", lambda e: e["content"].endswith("typed by Ann"))
+assert e["meta"]["typed"] is True and e["meta"]["from"] == "ann-box", e
+# A need goes on the board; the first person's answer reaches the asker as a HUMAN decision; a later one is refused.
+assert not m2.tool("send_to_peer", text="Ready to tag.", summary="Asks which version to tag",
+                   needs_human={"question": "Which version?", "options": ["0.2.0", "0.1.18"], "recommended": 0})[1]
+need = m1.find("board", lambda e: e["meta"]["board"]["needs"])["meta"]["board"]["needs"][0]
+assert (need["question"], need["from"], need["recommended"]) == ("Which version?", "bo-box", 0), need
+m1.outbox({"id": "a1", "answer": {"item": need["id"], "option": "0.2.0", "note": "go"}})
+d = m2.find("decision")
+assert d["meta"]["human"] is True and d["content"].startswith("[shipmates] HUMAN decision") and "Answer: 0.2.0" in d["content"], d
+assert "@ann-box" in d["content"] and "Their note: go" in d["content"], d
+ph.outbox({"id": "a2", "answer": {"item": need["id"], "option": "0.1.18"}})
+assert ph.find("answer_refused")["content"] == "Already answered by @ann-box."
+ph.find("board", lambda e: any(n.get("answered_by") == "ann-box" for n in e["meta"]["board"]["needs"]))
+# After crew traffic goes quiet, the hub's agent is asked for the board; it publishes the session summary.
+assert ph.find("crew_pass", timeout=20)["content"].startswith("[shipmates] Crew board due.")
+assert m1.tool("crew_board", summary="x")[1], "only a hub publishes a board"
+assert not ph.tool("crew_board", summary="Tagging v0.2.0", fyi=["Release notes still to write"])[1]
+b = m2.find("board", lambda e: e["meta"]["board"]["summary"] == "Tagging v0.2.0")["meta"]["board"]
+assert any(f["text"] == "Release notes still to write" and f["from"] == "hub" for f in b["fyi"]), b
+# The hub's own pane writes to the whole crew (peer "all"), marked typed and from the hub.
+ph.outbox({"id": "t2", "text": "hub typed to all", "peer": "all"})
+for s_ in (m1, m2):
+    e = s_.find("message", lambda e: e["content"].endswith("hub typed to all"))
+    assert e["meta"]["typed"] is True and e["meta"]["from"] == "hub", e
+assert ph.tool("unpair", peer="all")[0] == "Unpaired from all peers."
+
+# A plain pairing (no crew): the tags travel with the message, and the receiver's person answers the asker directly.
+x, y = Peer("X", client="claude-code"), Peer("Y")
+text, err = x.tool("pair_start", name="Xa")
+y.tool("pair_join", code=code_of(text), name="Yb")
+x.event("pair_request")
+assert not x.tool("pair_accept")[1]
+y.event("paired")
+assert not x.tool("send_to_peer", text="Ship it?", summary="Asks to ship",
+                  needs_human={"question": "Ship today?", "options": ["Yes", "No"], "recommended": 1})[1]
+e = y.find("message", lambda e: e["content"] == "Ship it?")
+assert e["meta"]["agent"] == "claude" and e["meta"]["needs"]["id"].startswith("m-"), e
+y.outbox({"id": "a3", "answer": {"item": e["meta"]["needs"]["id"], "option": "No", "question": "Ship today?"}})
+d = x.find("decision")
+assert d["meta"]["human"] is True and "Answer: No" in d["content"] and "Question: Ship today?" in d["content"], d
+assert x.tool("unpair")[0] == "Unpaired."
 
 print("PASS")

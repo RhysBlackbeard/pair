@@ -17,11 +17,13 @@ const PANE = {
 const BAND = {
   plugin: 'pair',
   component: 'AbovePrompt',
-  props: { bodyColumns: 120, hasSurvey: false, isWorking: false, maxRows: 3, scroll: { offset: 0, bodyRows: 3 }, view: {} },
+  props: { bodyColumns: 120, hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 3, scroll: { offset: 0, bodyRows: 3 }, view: {} },
 } as const
 
 const DATA = '/home/u/.claude/plugins/data'
 const DIR = `${DATA}/pair-inline/sessions/S1`
+/** The engine hands Windows paths (C:\home\u\...) on Windows: the test world compares in POSIX form. (15-Nov-26) */
+const posix = (p: string) => p.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
 const ANN = 'u@h · Ann · a@x'
 const line = (kind: string, content: string, meta: Record<string, unknown> = {}) =>
   `${JSON.stringify({ meta: { kind, peer: ANN, ...meta }, content })}\n`
@@ -37,6 +39,8 @@ function world(on: On) {
     isUp: true, // pair has made this session's folder
     isPlaced: true, // a surface places the pane when opened
     toolText: undefined as string | undefined, // what the model reads from a tool call
+    askAnswer: '', // the label the person picks in a question dialog ($.ui.ask)
+    alive: false, // something delivers events to Claude (the monitor's watch.alive is fresh)
   }
   mock.env(on, { HOME: '/home/u' })
   const clock = mock.clock(on, { now: Date.UTC(2026, 10, 14, 14, 2) })
@@ -51,17 +55,17 @@ function world(on: On) {
   })
   on('ui.toast', () => ({ value: undefined }))
   on('ui.status', () => ({ value: undefined }))
-  on('fs.exists', (_, e) => ({ value: e.path === DATA || (w.isUp && (e.path === DIR || e.path in files)) }))
+  on('fs.exists', (_, e) => ({ value: posix(e.path) === DATA || (w.isUp && (posix(e.path) === DIR || posix(e.path) in files)) }))
   on('fs.list', () => ({
     value: ['other-plugin', 'pair-inline'].map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })),
   }))
   on('fs.read', (_, e) => {
-    const text = w.isUp ? files[e.path] : undefined
+    const text = w.isUp ? files[posix(e.path)] : undefined
     if (text === undefined) throw new Error('missing')
     return { value: text }
   })
   on('fs.write', (_, e) => {
-    files[e.path] = e.text
+    files[posix(e.path)] = e.text
     return { value: undefined }
   })
   on('mcp.call', (_, e) => {
@@ -72,7 +76,21 @@ function world(on: On) {
     w.prompts.push(e.text)
     return { text: e.text }
   })
-  on('tool.call', () => ({ result: {}, ...(w.toolText === undefined ? {} : { text: w.toolText }) }))
+  on('tool.call', (_, e) => {
+    // $.ui.ask raises AskUserQuestion: answer with the person's pick. (AI Shipmates pane, 15-Nov-26)
+    if (e.tool === 'AskUserQuestion') {
+      const q = (e as unknown as { questions: { question: string }[] }).questions[0]!.question
+      return { result: { answers: { [q]: w.askAnswer } } }
+    }
+    return { result: {}, ...(w.toolText === undefined ? {} : { text: w.toolText }) }
+  })
+  // watch.alive "touched just now" while w.alive (a far-future mtime always counts as recent); nothing else exists.
+  on('fs.stat', (_, e) => {
+    if (w.alive && posix(e.path).endsWith('/watch.alive')) {
+      return { value: { kind: 'file' as const, size: 0, mtimeMs: 9e15, isLink: false } }
+    }
+    throw new Error('missing')
+  })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   return { w, clock, inbox: (s: string) => (files[`${DIR}/inbox.jsonl`] += s) }
 }
@@ -222,7 +240,7 @@ test('three peers: a row each, Accept names the request, chat goes to the picked
   await ui.unmount()
 })
 
-test('pair starts after the pane: it says so, then finds the session; mobile has no input', async ($, on) => {
+test('pair starts after the pane: it says so, then finds the session; mobile can type too', async ($, on) => {
   const { w, clock, inbox } = world(on)
   w.isUp = false
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -242,7 +260,8 @@ test('pair starts after the pane: it says so, then finds the session; mobile has
   inbox(line('paired', 'Ann accepted.'))
   await clock.advance(1000)
   const phone = await $.ui.mount({ ...PANE, surface: 'mobile' })
-  expect(await phone.find({ key: 'chat' })).toBeUndefined()
+  // CHANGED 15-Nov-26: Claude Code's mobile surface now has an Input (claude-code.d.ts Elements.mobile), so the box shows.
+  expect(await phone.find({ key: 'chat' })).toBeDefined()
   await phone.unmount()
 })
 
@@ -271,5 +290,84 @@ test('hand to Claude automatically, off: the server is told, and the pane says m
   expect(w.files[`${DIR}/deliver`]).toBe('off\n')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Messages wait here until you press → Claude/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// AI Shipmates pane (added 15-Nov-26, beads ship-anj.1-.6, .10).
+const CREW = {
+  hub: { name: 'Hub', agent: 'claude', colour: 0 },
+  members: [{ handle: 'ann-box', agent: 'claude', colour: 1 }, { handle: 'bo-box', agent: 'codex', colour: 2 }],
+  you: 'ann-box',
+}
+const BOARD = {
+  summary: 'Tagging v0.2.0',
+  needs: [{ id: 'n3', question: 'Which version?', options: ['0.2.0', '0.1.18'], recommended: 0, context: 'CI is green', from: 'bo-box' }],
+  fyi: [{ id: 'f1', from: 'hub', text: 'CI minutes at 80%' }],
+}
+
+test('AI Shipmates: summary first, typed text in full, crew and board, Needs you answers through the outbox', async ($, on) => {
+  const { w, clock, inbox } = world(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  inbox(line('paired', 'Hub accepted.', { peer_id: 'p1' }))
+  inbox(line('crew', 'crew list', { crew: CREW, peer_id: 'p1' }))
+  inbox(line('board', 'crew board', { board: BOARD, peer_id: 'p1' }))
+  inbox(line('message', '[shipmates] from @bo-box to @all:\nthe long full text', { summary: 'Build green on main', from: 'bo-box', agent: 'codex', colour: 2, peer_id: 'p1' }))
+  inbox(line('message', '[shipmates] from @hub to @all:\ntyped hello', { typed: true, from: 'hub', peer_id: 'p1' }))
+  inbox(line('message', '[shipmates] Shipmates: @hub (Hub), @bo-box.\nStart a message with @all', { peer_id: 'p1' }))
+  await clock.advance(1000)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /^AI Shipmates$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Tagging v0\.2\.0 · @hub, @ann-box, @bo-box/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Build green on main$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /the long full text/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /typed hello/ })).toBeDefined() // a person's text: in full
+    expect(await ui.find({ type: 'Text', text: / · no summary$/ })).toBeDefined() // pair's own notice: first line
+    expect(await ui.find({ type: 'Text', text: /crew list|crew board/ })).toBeUndefined() // no rows of their own
+    expect(await ui.find({ type: 'Text', text: /^Needs you \(1\)$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^You should know \(1\)$/ })).toBeDefined()
+    await ui.unmount()
+  }
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'full-in-3' })
+  expect(await ui.find({ type: 'Text', text: /the long full text/ })).toBeDefined()
+  w.askAnswer = '0.2.0 (Recommended)'
+  await ui.press({ key: 'needs' })
+  const sent = w.files[`${DIR}/outbox.jsonl`]!.trim().split('\n').map(l => JSON.parse(l))
+  expect(sent.at(-1)).toMatchObject({ answer: { item: 'n3', option: '0.2.0', question: 'Which version?' }, peer: 'p1' })
+  expect(await ui.find({ type: 'Text', text: /^Needs you \(0\)$/ })).toBeDefined()
+  await ui.press({ key: 'know' })
+  expect(await ui.find({ type: 'Text', text: /CI minutes at 80%/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('AI Shipmates: on the hub the message box writes to the whole crew', async ($, on) => {
+  const { w, clock, inbox } = world(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  inbox(line('paired', 'Ann accepted.', { peer_id: 'p1' }))
+  inbox(line('crew', 'crew list', { crew: { ...CREW, you: 'hub' }, peer: '' }))
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^Message the whole crew/ })).toBeDefined()
+  await ui.input({ key: 'chat', text: 'hello crew' })
+  expect(JSON.parse(w.files[`${DIR}/outbox.jsonl`]!.trim())).toMatchObject({ text: 'hello crew', peer: 'all' })
+  await ui.unmount()
+})
+
+test('→ Claude shows only for messages Claude did not already get by itself', async ($, on) => {
+  const { w, clock, inbox } = world(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  inbox(line('paired', 'Ann accepted.'))
+  w.alive = true
+  inbox(line('message', 'delivered by the monitor'))
+  await clock.advance(1000)
+  w.alive = false
+  inbox(line('message', 'nobody delivered this'))
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ key: 'hand-in-1' })).toBeUndefined()
+  expect(await ui.find({ key: 'hand-in-2' })).toBeDefined()
   await ui.unmount()
 })

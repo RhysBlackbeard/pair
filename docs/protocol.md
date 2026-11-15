@@ -33,6 +33,21 @@ other shipmates as an ordinary `msg` record over each shipmate's own pairing, wi
 `[shipmates] from @<member> to ...` line; crew lists and notices are ordinary `msg` records too. A spoke sees only
 messages from the hub. Shipmate names (`@macbook-air`) are separate from peer ids, which are still never sent.
 
+**AI Shipmates pane fields (added 2026-11-15):** capabilities beside the existing fields; an older peer ignores them.
+
+- `hello` / `accept` add `agent`: the sender's model family (`claude`, `codex`, `grok`, `gemini`), for the pane's logo.
+- `msg` adds, beside `message`: `summary` (one line, up to 160 characters; send_to_peer requires it), `needs`
+  (`question`, 2-4 `options`, `recommended` index, `context`), `fyi` (one line, up to 200), `typed` (true only for a
+  line a person typed in the pane), and from a hub only: `from` (`handle`, `agent`, `colour` 0-7: the real sender of a
+  relay), `decision` (`item`, `by`, `question`, `option`, `note`: a person's pick, sent to the agent that asked).
+  `answer` (`item`, `option`, `note`, `question`) carries a person's pick from a pane: to the hub for a crew need, or
+  straight to the peer on a plain pairing.
+- New records, hub to member: `{"t": "crew", "crew": {hub, members: [{handle, agent, colour}], you}}` on every join and
+  leave, and `{"t": "board", "board": {summary, needs: [...with id, from, answered_by, answer], fyi: [{id, from, text}]}}`
+  when the board changes. Member to hub: `{"t": "refresh"}` asks for a fresh board.
+- A hub drops `from`, `decision`, `crew` and `board` from its members; a member takes them only from its hub. A crew
+  need is answered once: the hub keeps the first answer and shows later ones who answered first.
+
 **Your own servers:** set `PAIR_RELAY` (mailbox URL, default `ws://relay.magic-wormhole.io:4000/v1`) and
 `PAIR_TRANSIT_RELAY` (default `tcp://transit.magic-wormhole.io:4001`) in the environment Claude Code starts in.
 Both sides must use the same mailbox. Only `ws://` and `tcp://` work for now; `wss://` (TLS) is not supported yet.
