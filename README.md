@@ -1,7 +1,7 @@
 # pair
 
 Pair two people's Claude Code sessions with a one-time code, like pairing Bluetooth headphones.
-You run `/pair:pair` and get a code like `7-amber-falcon`. Your colleague enters it, you approve, and the
+You run `/pair` and get a code like `7-amber-falcon`. Your colleague enters it, you approve, and the
 two agents can message each other live, end-to-end encrypted.
 
 Built by [Blackbeard Technologies](https://blackbeard.tech).
@@ -17,8 +17,9 @@ In Claude Code:
 
 Restart Claude Code, then:
 
-- `/pair:pair` gives you a code to send to your colleague (it works once and expires in 2 minutes).
-- `/pair:pair 7-amber-falcon` joins a colleague's session.
+- `/pair` gives you a code to send to your colleague (it works once and expires in 2 minutes; ask Claude for up to 5).
+- `/pair 7-amber-falcon` joins a colleague's session.
+- If another command is also named `pair`, type `/pair:pair` instead.
 
 When someone joins, Claude Code asks you to approve the pairing in its own confirmation dialog (in every mode, also on
 your phone), and nothing is exchanged until you say yes.
@@ -30,7 +31,7 @@ Once paired, ask Claude to message the other agent, or to send them a file (up t
 directly, 25 MB when they go through magic-wormhole's transit relay).
 Say "unpair", or close the session, to end it.
 
-You can stay paired with up to 3 people at once: run `/pair:pair` again for another code, or join another code, while
+You can stay paired with up to 3 people at once: run `/pair` again for another code, or join another code, while
 already paired. Each pairing has its own trust level and a short peer id (`p1`, `p2`, ...) that Claude uses to send to
 the right person; when it can't tell who you mean, it asks. Peers don't see each other's messages, and Claude doesn't
 pass one peer's messages on to another unless you ask it to. The other side needs no update for this: each pairing is
@@ -125,10 +126,11 @@ traffic and can't read messages or files.
   pairing, and everything is end-to-end encrypted ([magic-wormhole](https://magic-wormhole.readthedocs.io/): SPAKE2 key exchange).
 - **You approve every pairing.** The request shows who is joining: `user@host · git name · git email`.
 - **Peer messages are requests, not instructions.** Claude Code marks them as coming from the plugin, not from
-  you, and Claude treats them like any other outside content, such as a web page. You choose a trust level when
-  pairing that tells Claude how far to go on a peer's request: `read-only` (default: answer and read files, ask you
-  before anything else), `ask` (ask you before any action a peer asks for) or `normal` (Claude's usual judgement).
-  Your own requests run with your usual permissions.
+  you, and Claude treats them like any other outside content, such as a web page. A trust level tells Claude how far
+  to go on a peer's request: `read-only` (answer and read files, ask you before anything else), `ask` (ask you before
+  any action a peer asks for) or `normal` (Claude's usual judgement). Name one when you pair (`/pair ask`), or
+  set **Default trust level** in `/plugin` → pair → options; it starts at `read-only`. Your own requests run with
+  your usual permissions.
 - **Approvals stay with you.** A peer can never approve tool use in your session.
 - **Files:** every file you send needs your OK in Claude Code's own confirmation dialog (Claude can't answer it for
   you, and auto mode doesn't skip it), and secret-looking files (`.ssh`, `.env`, keys) are refused.

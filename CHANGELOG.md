@@ -18,6 +18,35 @@ separately; each early entry names the plugin versions that used that binary.
   pick; the threat model adds T17-T19 (one peer reaching another through your Claude, wrong recipient, look-alike
   peers).
 
+## 0.1.17 (2026-11-14)
+
+- Claude desktop app (Code tab) and IDEs: your colleague's messages and other pair events no longer show as
+  "Stop hook blocking error from command FileChanged". They arrive labelled "From the pair plugin:", with the
+  summary "pair: new event". (GitHub #5)
+- Shorter banner: "pair · https://blackbeard.tech". (GitHub #23)
+- pair now says `/pair <code>` instead of `/pair:pair <code>`: Claude Code runs the plugin's skill as `/pair` unless
+  another command is also named `pair`, in which case `/pair:pair` still works. (GitHub #24)
+- Pairing codes still expire after 2 minutes, but you can ask for up to 5 (for example "/pair, code valid for 5
+  minutes"): `pair_start` takes `expires_in_minutes` (1 to 5) and refuses other values.
+- Delivery confirmation for messages: when the other side runs this version or later, `send_to_peer` waits up to 3 s
+  and says "delivered" once their pair has the message, or "not confirmed yet". A later confirmation marks the
+  message delivered in the pair pane, for messages you send there and your Claude's, without telling Claude. With an
+  older peer nothing changes. (GitHub #9)
+- Windows with Git Bash: the first download of the pair binary by a hook or the monitor could fail with "checksum
+  mismatch" when the plugin data folder was a `C:\...` path, so live delivery didn't start in that session. The
+  launcher now checks the download correctly.
+- When someone enters your code, Claude goes straight to the confirmation dialog instead of first asking you in
+  chat as well, and afterwards says that you approved the pairing rather than that it accepted it.
+
+## 0.1.16 (2026-11-14)
+
+- New option, **Default trust level** (read-only unless you change it): what a pairing uses when you don't name a
+  level as you pair. Claude now leaves the level out unless you named one, so the setting applies. The pair pane
+  shows the level from the start of the pairing.
+- Codex: a chat could stop being woken for new messages if Codex refused or deferred the `check_messages` call that
+  follows a wake. The wake now tries again after a minute, and `check_messages` says when pair last woke the chat
+  and whether that worked. (GitHub #6)
+
 ## 0.1.15 (2026-11-14)
 
 - New option, **Hand messages to Claude automatically** (on by default). Off, your colleague's messages and files

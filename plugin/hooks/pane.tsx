@@ -154,12 +154,12 @@ function nextStatus(s: PairStatus, e: PairEvent & { identity?: string }): PairSt
   const put = (p: PairPeer) => ({ peers: old ? s.peers.map(x => (x.id === id ? p : x)) : [...s.peers, p] })
   switch (e.kind) {
     case 'pair_request':
-      return put({ id, phase: 'request', peer, trust: old?.trust })
+      return put({ id, phase: 'request', peer, trust: old?.trust ?? startTrust[id] })
     case 'paired':
     case 'message':
     case 'file':
     case 'file_delivered':
-      return put({ ...old, id, phase: 'paired', peer, trust: e.trust ?? old?.trust, via: e.via ?? old?.via })
+      return put({ ...old, id, phase: 'paired', peer, trust: e.trust ?? old?.trust ?? startTrust[id], via: e.via ?? old?.via })
     case 'connection':
       // A joiner whose first connection fails hears this before 'paired': it adds the pairing, as reconnecting.
       return put({ ...old, id, peer, phase: /dropped|Couldn't connect/.test(e.text) ? 'reconnecting' : 'paired' })
@@ -228,6 +228,10 @@ let polling = false // a slow read must not overlap the next tick: both would ad
 // The "Hand messages to Claude automatically" option (userConfig hand_to_claude, default on). The server reads it from
 // <session dir>/deliver, and counts a file older than 30 s as on, so it is rewritten every 10 s while the mod runs.
 let handToClaudeAuto = true
+let defaultTrust = 'read-only' // userConfig default_trust: what pair_start/pair_join use when the call names none
+// The trust each pairing started with, by peer id, from the pair_start / pair_join call (multi-peer, 15-Nov-26). A
+// reload empties it; the row then shows the trust from the pairing's events, or the default.
+const startTrust: Record<string, string> = {}
 let deliverWrittenAt = 0
 
 async function poll($: EngineInterface) {
@@ -269,11 +273,13 @@ async function pollOnce($: EngineInterface) {
   const now = await $.clock.now()
   const fresh: (PairEvent & { identity?: string })[] = []
   const delivered: { name: string; peerId?: string }[] = []
+  const confirmed: string[] = [] // message ids the peer's pair received (late msg_ok)
   lines.slice(from).forEach((line, i) => {
     try {
       const ev = JSON.parse(line)
       const m = ev.meta ?? {}
       if (m.kind === 'probe') return
+      if (m.kind === 'message_delivered') return void confirmed.push(String(m.id ?? ''))
       const content = String(ev.content ?? '')
       if (m.kind === 'file_delivered') {
         delivered.push({ name: content.match(/received "(.+)"\.$/)?.[1] ?? '', peerId: m.peer_id })
@@ -305,6 +311,10 @@ async function pollOnce($: EngineInterface) {
       const samePeer = (m: PairEvent) => !peerId || !m.peerId || m.peerId === peerId
       const f = out.find(m => m.kind === 'sent-file' && m.name === name && !m.delivered && samePeer(m))
       if (f) out[out.indexOf(f)] = { ...f, delivered: true }
+    }
+    for (const id of confirmed) {
+      const i = out.findIndex(m => m.id === `out-${id}` || m.id === `claude-${id}`)
+      if (i >= 0) out[i] = { ...out[i]!, delivered: true }
     }
     const rows = fresh.filter(m => m.kind !== 'file_delivered').map(({ identity: _, ...m }) => m)
     return [...out, ...rows].slice(-200)
@@ -361,6 +371,24 @@ const firstText = (r: { content: { type: string; text?: string }[] }) =>
 
 export const register: Register = (on, options) => {
   handToClaudeAuto = options.hand_to_claude !== false
+  defaultTrust = String(options.default_trust ?? 'read-only')
+
+  // The trust level a pairing starts with: the call's own, else the setting (v0.1.16). Multi-peer (CHANGED 15-Nov-26):
+  // kept per peer id, read from the result's "Peer id: p2" / "peer id: p2", since several pairings can differ.
+  for (const tool of ['mcp__plugin_pair_pair__pair_start', 'mcp__plugin_pair_pair__pair_join'] as const) {
+    on('tool.call', { tool }, async ($, e, next) => {
+      const r = await next(e)
+      const trust = String((e as { trust?: unknown }).trust ?? defaultTrust)
+      const id = (r.text ?? '').match(/[Pp]eer id: (p\d{1,10})/)?.[1]
+      if (!r.deny && !r.isError && id) {
+        startTrust[id] = trust
+        await update($, status, (s): PairStatus => ({
+          peers: s.peers.map(p => (p.id === id ? { ...p, trust: p.trust ?? trust } : p)),
+        }))
+      }
+      return r
+    }).catch(($, e, next) => next(e))
+  }
   deliverWrittenAt = 0 // a reload (also a change of the option) writes it again at once
 
   on('session.start', async ($, e, next) => {
@@ -425,9 +453,12 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const text = String((e as { text?: unknown }).text ?? '')
     if (!r.deny && !r.isError && text) {
+      // "delivered", or "queued for sending (not confirmed yet; message id X)" whose message_delivered comes later.
+      const said = r.text ?? ''
+      const id = said.match(/message id ([\w-]+)/)?.[1] ?? e.tool_use_id
       await addRows($, [
-        { id: `claude-${e.tool_use_id}`, kind: 'claude', peer: '', text, at: await $.clock.now(),
-          ...(await sentTo($, argPeer(e))) },
+        { id: `claude-${id}`, kind: 'claude', peer: '', text, at: await $.clock.now(),
+          ...(said.startsWith('delivered') ? { delivered: true } : {}), ...(await sentTo($, argPeer(e))) },
       ])
     }
     return r
@@ -499,7 +530,7 @@ export const register: Register = (on, options) => {
           {dot} <Text bold={!many || p === cur}>{name}</Text>
           {host && <Text dimColor> · {host}</Text>}
           <Text dimColor> · trust: </Text>
-          {p.trust ?? 'read-only'}
+          {p.trust ?? startTrust[p.id] ?? defaultTrust}
           {p.phase === 'request' && many && <Text color={SOON}> · wants to pair</Text>}
           {p.phase === 'reconnecting' && <Text color={SOON}> · reconnecting</Text>}
           {p.via && p.phase === 'paired' && <Text dimColor> · {p.via}</Text>}
@@ -532,7 +563,7 @@ export const register: Register = (on, options) => {
           {s.peers.length > 0 &&
             (roomLeft > 0 ? (
               <Text dimColor>
-                + Pair another: /pair:pair ({s.peers.length} of {MAX_PEERS})
+                + Pair another: /pair ({s.peers.length} of {MAX_PEERS})
               </Text>
             ) : (
               <Text dimColor>
@@ -621,7 +652,7 @@ export const register: Register = (on, options) => {
             @ <Link href={SITE}>blackbeard.tech</Link>
           </Text>
           <Text>Not paired.</Text>
-          <Text dimColor>Run /pair:pair for a code to send to a colleague, or /pair:pair &lt;code&gt; to join theirs.</Text>
+          <Text dimColor>Run /pair for a code to send to a colleague, or /pair &lt;code&gt; to join theirs.</Text>
           {!d && <Text dimColor>pair isn’t running in this session yet.</Text>}
         </Box>
       )
@@ -675,6 +706,7 @@ export const register: Register = (on, options) => {
               {who(m)}
             </Text>
             {fresh && <Text color={SOON}> new</Text>}
+            {m.delivered && <Text color={ACCENT}> delivered</Text>}
           </Text>
           {m.kind === 'file' ? (
             <Text>

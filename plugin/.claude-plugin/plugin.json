@@ -1,6 +1,6 @@
 {
   "name": "pair",
-  "version": "0.1.15",
+  "version": "0.1.17",
   "description": "Pair your Claude Code session with a colleague's using a one-time code, then let the two agents message each other, end-to-end encrypted. By Blackbeard Technologies.",
   "author": {
     "name": "Blackbeard Technologies",
@@ -9,6 +9,10 @@
   "homepage": "https://blackbeard.tech",
   "repository": "https://github.com/blackbeard-tech/pair",
   "license": "Apache-2.0",
+  "icon": "./.claude-plugin/icon.png",
+  "documentationUrl": "https://github.com/blackbeard-tech/pair#readme",
+  "supportUrl": "https://github.com/blackbeard-tech/pair/issues",
+  "privacyPolicyUrl": "https://github.com/blackbeard-tech/pair/blob/main/docs/privacy.md",
   "types": "./types/index.d.ts",
   "userConfig": {
     "hand_to_claude": {
@@ -16,19 +20,33 @@
       "title": "Hand messages to Claude automatically",
       "description": "On: your colleague's messages and files go to Claude as they arrive. Off: they wait in the pair pane until you press → Claude (needs the pane; without it they always go to Claude).",
       "default": true
+    },
+    "default_trust": {
+      "type": "string",
+      "title": "Default trust level",
+      "description": "What your colleague's requests may make Claude do without asking you, when you don't name a level as you pair. read-only: answer and read files, ask before anything else. ask: ask before anything. normal: Claude's usual judgement and your permission mode.",
+      "options": ["read-only", "ask", "normal"],
+      "default": "read-only"
     }
   },
   "keywords": [
     "pairing",
+    "pair-programming",
+    "collaboration",
     "agents",
+    "multi-agent",
     "a2a",
+    "messaging",
+    "file-transfer",
+    "end-to-end-encryption",
     "magic-wormhole"
   ],
   "mcpServers": {
     "pair": {
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pair",
       "env": {
-        "PAIR_DATA": "${CLAUDE_PLUGIN_DATA}"
+        "PAIR_DATA": "${CLAUDE_PLUGIN_DATA}",
+        "PAIR_DEFAULT_TRUST": "${user_config.default_trust}"
       }
     }
   }

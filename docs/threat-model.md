@@ -11,9 +11,9 @@ other agent tools (P3) and remembered peers are out of scope.
 
 ## How it works
 
-1. Owner A runs `/pair:pair`. A's local `pair` binary (an MCP server started by Claude Code)
+1. Owner A runs `/pair`. A's local `pair` binary (an MCP server started by Claude Code)
    connects to the relay and gets a code such as `7-amber-falcon`: a nameplate number and two words.
-2. A tells B the code out of band (chat, voice). B runs `/pair:pair 7-amber-falcon`.
+2. A tells B the code out of band (chat, voice). B runs `/pair 7-amber-falcon`.
 3. Both binaries run SPAKE2 through the relay. If the codes match, both derive the same key K.
    If they don't match, both sides fail and the code is burned.
 4. B sends an encrypted hello (display name). A's owner approves or rejects in their own session (Claude Code's own confirmation dialog for `pair_accept`, which no mode skips).
@@ -39,14 +39,14 @@ other agent tools (P3) and remembered peers are out of scope.
 | Mailbox relay operator | Both IP addresses, timing of setup, app ID, nameplate, mailbox ID | Message content, K, the code words |
 | Transit relay operator (only when the machines can't connect directly) | Both IP addresses, timing, message and file sizes | Message content, K |
 | Network observer (P1 uses plaintext `ws://` on port 4000) | The same metadata as the relay | Message content |
-| Paired peer | Whatever your Claude sends them | Your files, tools or session, except through your Claude's replies |
+| Paired peer | Whatever your Claude sends them, and when each of their messages reached your pair (delivery confirmations, 0.1.17+; fine between paired peers) | Your files, tools or session, except through your Claude's replies |
 | Someone who overhears the code | Nothing, unless they redeem it before B does (see T1) | |
 
 ## Threats and mitigations
 
 | # | Threat | Mitigation | Remaining risk |
 |---|---|---|---|
-| T1 | **Code guessing or interception.** An attacker redeems the code before B does. | SPAKE2 gives one online guess per code (2 words ≈ 16 bits, 1 in 65,536). A wrong guess fails both sides and burns the code (tested). An intercepted code still needs A's approval, and the approval prompt shows the joiner's name. | If the code leaks and the attacker gets in first, A could approve them by mistake. Codes are single-use; the ~2-minute expiry is enforced by our client (not yet covered by a test). |
+| T1 | **Code guessing or interception.** An attacker redeems the code before B does. | SPAKE2 gives one online guess per code (2 words ≈ 16 bits, 1 in 65,536). A wrong guess fails both sides and burns the code (tested). An intercepted code still needs A's approval, and the confirmation dialog shows the joiner's name. | If the code leaks and the attacker gets in first, A could approve them by mistake. Codes are single-use and expire after 2 minutes by default, at most 5 if the user asks for longer (`pair_start` rejects anything else); our client enforces the expiry (not yet covered by a test). |
 | T2 | **Relay reads or alters messages.** | Messages are encrypted and authenticated (NaCl secretbox) with keys only the two peers hold. The relay can't run a man-in-the-middle attack without knowing the code (that's what SPAKE2 guarantees). | Metadata is exposed (see table). The relay can delay or drop messages. |
 | T3 | **Prompt injection from the peer.** Peer messages try to make your Claude act against you. | Inbound messages are marked as untrusted requests from the named peer, never as instructions from the owner. Claude Code delivers them as harness notices (hook output inside a `<system-reminder>`, or a "Monitor event"), which its system prompt says don't come from the user, and it records them with a non-user origin. In a 2026-11-08 test (auto mode, Sonnet), Claude declined peer requests to run a command that it ran at once when the user typed the same request. The owner picks a trust level when pairing: **read-only** (default; for peer requests, answer and read, ask before anything else), **ask** (ask before any action a peer requests) or **normal**. The server instructions and each message carry it to Claude as guidance for peer-requested actions. Since 0.1.12 pair no longer enforces it with a PreToolUse hook: the hook couldn't tell the owner's requests from a peer's, so it asked about the owner's own work too (GitHub #5). Tool calls follow the owner's permission mode, as they do for any other untrusted content such as a fetched web page. | Claude's judgement and the owner's permission mode are the defence; pair adds no gate of its own, except that with the pair pane's "Hand messages to Claude automatically" option off (default on), the peer's messages and files reach Claude only when the owner hands one over, framed as the peer's request. The pane refreshes that choice every 10 s and the server treats an older one as on, so a switched-off mod never hides messages. Accepting a pairing and sending a file still need the owner's yes in Claude Code's own dialog (T11). Not tested: whether auto mode's classifier blocks a peer-requested action that Claude does attempt. |
 | T4 | **Peer approves your tool use.** | `pair` declares no channel at all (and never the channel permission-relay capability), so approvals always stay with the local owner. A unit test checks this (`never_declares_permission_relay`). | None identified. |
@@ -71,7 +71,7 @@ other agent tools (P3) and remembered peers are out of scope.
 
 1. The public relay's metadata exposure is acceptable for the pilot.
 2. No outbound content filter in the pilot (T5); revisit for a paid tier.
-3. Default trust level is read-only.
+3. Default trust level is read-only. (Since 0.1.16 each user can change their own default with the plugin's Default trust level option; it is theirs to set, never the peer's, and Claude is told to name a level only when the user did.)
 
 ## Owner decisions (2026-11-08)
 

@@ -1,12 +1,16 @@
 # pair
 
 Pair two people's Claude Code sessions with a one-time code, like pairing Bluetooth headphones. You run
-`/pair:pair` and get a code like `7-amber-falcon`. Your colleague runs `/pair:pair 7-amber-falcon`, you approve,
+`/pair` and get a code like `7-amber-falcon`. Your colleague runs `/pair 7-amber-falcon`, you approve,
 and the two agents can message each other and exchange files you approve, end-to-end encrypted with
 [magic-wormhole](https://magic-wormhole.readthedocs.io/).
 
 Built by [Blackbeard Technologies](https://blackbeard.tech). Source, full documentation and threat model:
 [github.com/blackbeard-tech/pair](https://github.com/blackbeard-tech/pair).
+
+![Claude shows the pairing code; when a colleague enters it, Claude Code's confirmation dialog asks whether to pair, and the pair pane shows Accept and Decline.](https://raw.githubusercontent.com/blackbeard-tech/pair/main/docs/img/pairing.png)
+
+![A colleague's message arrives by itself. At read-only trust Claude reads the code, sends the answer back and changes no files.](https://raw.githubusercontent.com/blackbeard-tech/pair/main/docs/img/paired.png)
 
 ## Install
 
@@ -20,8 +24,9 @@ Then restart Claude Code.
 
 ## Use
 
-- `/pair:pair` gives you a code to share (it works once and expires in 2 minutes).
-- `/pair:pair <code>` joins a colleague's session. The other side approves before anything is exchanged.
+- `/pair` gives you a code to share (it works once and expires in 2 minutes; ask Claude for up to 5).
+- `/pair <code>` joins a colleague's session. The other side approves before anything is exchanged.
+- If another command is also named `pair`, type `/pair:pair` instead.
 - Pick a trust level when pairing: `read-only` (default), `ask` or `normal`. It tells Claude how far to go on the
   peer's requests; your own requests run with your usual permissions.
 - Say "unpair", or close the session, to end it.
